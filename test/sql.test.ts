@@ -52,6 +52,22 @@ test('schema and teardown scripts render and split into statements', () => {
   assert.equal(splitStatements(loadSql('99_teardown.sql')).length, 1);
 });
 
+test('model-loading scripts render for both targets and split into four statements', () => {
+  const local = splitStatements(loadSql('03_load_models.sql', {
+    ONNX_DIRECTORY: 'ONNX_DIR', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
+  }));
+  assert.equal(local.length, 4);
+  assert.ok(local[1]!.includes("directory  => 'ONNX_DIR'") && local[1]!.includes("'e.onnx'"));
+  assert.ok(local[3]!.includes("'r.onnx'") && local[3]!.includes('DOC_EMBEDDER') === false);
+
+  const adb = splitStatements(loadSql('03_load_models_adb.sql', {
+    PAR_BASE_URL: 'https://x/p/abc/n/ns/b/models/o/', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
+  }));
+  assert.equal(adb.length, 4);
+  assert.ok(adb[1]!.includes("'https://x/p/abc/n/ns/b/models/o/e.onnx'"));
+  assert.ok(adb[3]!.includes('LOAD_ONNX_MODEL_CLOUD'));
+});
+
 test('splitStatements drops comment-only fragments', () => {
   assert.deepEqual(splitStatements('-- just a comment\n/\nSELECT 1 FROM DUAL\n/'), ['SELECT 1 FROM DUAL']);
 });

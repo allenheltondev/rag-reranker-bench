@@ -1,17 +1,15 @@
--- Load the ONNX models into the database.
+-- Load the ONNX models into the database from a directory object (Oracle Free container).
+-- For Autonomous Database use 03_load_models_adb.sql. Run either with:
 --
--- Both files must already be in a directory object the database can read. The usual setup is:
+--   npm run models
 --
---   CREATE OR REPLACE DIRECTORY ONNX_DIR AS '/opt/oracle/onnx';
---   GRANT READ ON DIRECTORY ONNX_DIR TO <bench_user>;
+-- which substitutes the placeholders from .env and runs as the benchmark user. The files must
+-- already be in the directory (docker-compose mounts ./models/oracle at /opt/oracle/onnx).
+-- The in-database reranker must be the augmented export (tokenizer embedded in the graph);
+-- the application copy from scripts/export-reranker-onnx.sh is not that. See sql/README.md.
 --
--- and then copy the exported models there. scripts/export-reranker-onnx.sh produces the
--- application-side copy of the reranker; the in-database copy must be the augmented export
--- (tokenizer embedded in the graph) that DBMS_VECTOR.LOAD_ONNX_MODEL expects. See sql/README.md.
---
--- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}
+-- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}, ${ONNX_DIRECTORY}, ${EMBED_FILE}, ${RERANK_FILE}
 
--- Embedding model, used by VECTOR_EMBEDDING() during load and for vector retrieval.
 BEGIN
   DBMS_VECTOR.DROP_ONNX_MODEL(model_name => '${EMBED_MODEL}', force => TRUE);
 EXCEPTION
@@ -21,8 +19,8 @@ END;
 
 BEGIN
   DBMS_VECTOR.LOAD_ONNX_MODEL(
-    directory  => 'ONNX_DIR',
-    file_name  => 'all_MiniLM_L12_v2.onnx',
+    directory  => '${ONNX_DIRECTORY}',
+    file_name  => '${EMBED_FILE}',
     model_name => '${EMBED_MODEL}',
     metadata   => JSON('{
       "function"       : "embedding",
@@ -33,7 +31,6 @@ BEGIN
 END;
 /
 
--- Cross-encoder, invoked from SQL once it is a database object.
 BEGIN
   DBMS_VECTOR.DROP_ONNX_MODEL(model_name => '${RERANK_MODEL}', force => TRUE);
 EXCEPTION
@@ -43,8 +40,8 @@ END;
 
 BEGIN
   DBMS_VECTOR.LOAD_ONNX_MODEL(
-    directory  => 'ONNX_DIR',
-    file_name  => 'bge_reranker_base.onnx',
+    directory  => '${ONNX_DIRECTORY}',
+    file_name  => '${RERANK_FILE}',
     model_name => '${RERANK_MODEL}',
     metadata   => JSON('{
       "function" : "regression",

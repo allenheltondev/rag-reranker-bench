@@ -8,10 +8,9 @@
 #   docker compose up -d
 #   docker compose logs -f oracle     # wait for "DATABASE IS READY TO USE!"
 #
-# Then create the directory object the model loader reads from:
-#   docker compose exec oracle sqlplus / as sysdba
-#   CREATE OR REPLACE DIRECTORY ONNX_DIR AS '/opt/oracle/onnx';
-#   GRANT READ ON DIRECTORY ONNX_DIR TO BENCH;
+# Then create the benchmark user and the directory object the model loader reads from. Both
+# are in sql/00_user.sql (uncomment the two directory lines and set the tablespace to USERS):
+#   docker compose exec -T oracle sqlplus -s / as sysdba < sql/00_user.sql
 
 services:
   oracle:

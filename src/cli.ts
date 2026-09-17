@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
-import { closePool, describeOracle, withConnection } from './db/oracle.js';
+import { assertIdentifier, closePool, describeOracle, withConnection } from './db/oracle.js';
 import { countChunks, loadChunks, runScript } from './db/load.js';
 import { AppReranker } from './rerank/app.js';
 import { scoreExpr } from './rerank/indb.js';
@@ -94,6 +94,33 @@ async function cmdLoad(): Promise<void> {
     log('Skipped the approximate vector index (exact search keeps recall out of the comparison).');
     log('Pass --vector-index to create it anyway.');
   }
+}
+
+/** Load the ONNX models into the database, from a directory object or from Object Storage. */
+async function cmdModels(): Promise<void> {
+  const target = flag('adb') ? 'adb' : oracle.target;
+  if (target === 'adb') {
+    if (!oracle.modelsParUrl) {
+      throw new Error('ORACLE_MODELS_PAR_URL is required for the adb target (terraform output models_par_base_url).');
+    }
+    const base = oracle.modelsParUrl.endsWith('/') ? oracle.modelsParUrl : `${oracle.modelsParUrl}/`;
+    log(`Loading ${oracle.embedFile} and ${oracle.rerankFile} from Object Storage as ${oracle.embedModel} / ${oracle.rerankModel}...`);
+    await runScript('03_load_models_adb.sql', {
+      PAR_BASE_URL: base.replace(/'/g, "''"),
+      EMBED_FILE: oracle.embedFile,
+      RERANK_FILE: oracle.rerankFile,
+    });
+  } else {
+    log(`Loading ${oracle.embedFile} and ${oracle.rerankFile} from directory ${oracle.onnxDirectory} as ${oracle.embedModel} / ${oracle.rerankModel}...`);
+    await runScript('03_load_models.sql', {
+      ONNX_DIRECTORY: assertIdentifier(oracle.onnxDirectory, 'ORACLE_ONNX_DIRECTORY'),
+      EMBED_FILE: oracle.embedFile,
+      RERANK_FILE: oracle.rerankFile,
+    });
+  }
+  const info = await describeOracle();
+  log(`Models now in schema: ${info.models.join(', ') || '(none)'}`);
+  await closePool();
 }
 
 /** Check every moving part before a run, and say precisely which one is not ready. */
@@ -235,6 +262,7 @@ function cmdHelp(): void {
 
   npm run corpus                      Generate the corpus and query set into data/
   npm run load                        Create the schema and load the corpus into Oracle
+  npm run models                      Load the ONNX models into the database (--adb for Object Storage)
   npm run doctor                      Check Oracle, the models, and the app reranker
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run
@@ -262,6 +290,7 @@ Flags for doctor:
 const commands: Record<string, () => Promise<void> | void> = {
   corpus: cmdCorpus,
   load: cmdLoad,
+  models: cmdModels,
   doctor: cmdDoctor,
   bench: cmdBench,
   report: cmdReport,

@@ -47,6 +47,13 @@ export const oracle = {
    */
   indbControlExpr: process.env.ORACLE_INDB_CONTROL_EXPR ?? '',
   schemaPrefix: process.env.ORACLE_SCHEMA_PREFIX ?? 'BENCH',
+  /** 'local' loads ONNX files from a directory object; 'adb' loads them from Object Storage. */
+  target: (process.env.ORACLE_TARGET ?? 'local') as 'local' | 'adb',
+  onnxDirectory: process.env.ORACLE_ONNX_DIRECTORY ?? 'ONNX_DIR',
+  /** Pre-authenticated request base URL for the models bucket (infra/oci output). Must end with '/'. */
+  modelsParUrl: process.env.ORACLE_MODELS_PAR_URL ?? '',
+  embedFile: process.env.ORACLE_EMBED_FILE ?? 'all_MiniLM_L12_v2.onnx',
+  rerankFile: process.env.ORACLE_RERANK_FILE ?? 'bge_reranker_base.onnx',
 } as const;
 
 export const app = {

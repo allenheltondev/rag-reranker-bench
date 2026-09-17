@@ -149,6 +149,14 @@ npm run bench -- --backend fixture --iterations 5 --warmup 2 --candidates 10,40
 
 ## Running it for real
 
+Two targets. **Local** (Oracle Free in a container, app on the same machine) proves the
+pipeline and gives you the compute comparison. **Oracle Cloud** (Autonomous Database plus a
+separate VM, [`infra/oci`](infra/oci/README.md)) is what a published number should come from:
+with the database and the application on different hosts, the "bytes leaving the database"
+measurement crosses a real network instead of a loopback interface, and the locality argument
+becomes something the transfer batch can actually measure. The steps below are the local
+path; the cloud README maps each one onto its equivalent.
+
 ### 1. A database
 
 ```bash
@@ -160,7 +168,12 @@ docker compose logs -f oracle # wait for "DATABASE IS READY TO USE!"
 Check the image tag: in-database reranking needs a release that can load an ONNX reranking
 model. The report records the version you actually ran.
 
-### 2. The models
+### 2. The user
+
+Once, as SYS (container) or ADMIN (Autonomous): edit the `DEFINE`s at the top of
+[`sql/00_user.sql`](sql/00_user.sql) and run it. Everything after this runs as that user.
+
+### 3. The models
 
 Both sides must run the same checkpoint, packaged two ways — a plain ONNX export for the
 application, and an augmented export with the tokenizer in the graph for the database. See
@@ -168,11 +181,12 @@ application, and an augmented export with the tokenizer in the graph for the dat
 
 ```bash
 scripts/export-reranker-onnx.sh          # application copy -> ./models/bge-reranker-base
-# put the augmented export and the embedding model in ./models/oracle, then:
-# sqlplus> @sql/03_load_models.sql
+# put the augmented reranker and the embedding model in ./models/oracle (mounted into the
+# container at /opt/oracle/onnx), then:
+npm run models
 ```
 
-### 3. Load and check
+### 4. Load and check
 
 ```bash
 npm run load
@@ -183,7 +197,7 @@ npm run doctor
 running before every session; the failure it most often catches is the scoring expression
 silently returning a class instead of a score.
 
-### 4. Run
+### 5. Run
 
 ```bash
 npm run bench

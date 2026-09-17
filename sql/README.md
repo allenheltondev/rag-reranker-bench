@@ -11,9 +11,11 @@ placeholders filled in.
 
 | File | What it does |
 |---|---|
+| `00_user.sql` | Creates the benchmark user and its grants. Run once as ADMIN/SYS from SQLcl; the only script not run through `npm`. |
 | `01_schema.sql` | The chunk table: text, metadata, and a `VECTOR` column in one row. Creates the Oracle Text index used by the lexical arm. |
 | `02_vector_index.sql` | Optional approximate vector index. Not used by default (see below). |
-| `03_load_models.sql` | Loads the embedding model and the cross-encoder with `DBMS_VECTOR.LOAD_ONNX_MODEL`. |
+| `03_load_models.sql` | Loads both models from a directory object (container). `npm run models`. |
+| `03_load_models_adb.sql` | Loads both models from Object Storage (Autonomous). `ORACLE_TARGET=adb npm run models`. **Unverified — see below.** |
 | `query_candidates.sql` | Scope filter → lexical + vector retrieval → RRF fusion. The candidate set both rerankers score. |
 | `rerank_indb_prediction.sql` | The same pipeline with cross-encoder scoring appended, as one statement. Also the control: with `${SCORE_EXPR}` swapped for `LENGTH(:qtext \|\| TITLE \|\| '. ' \|\| CONTENT)` it does everything but inference. |
 | `rerank_indb_utl.sql` | Alternative in-database path via `DBMS_VECTOR.UTL_TO_RERANK`. **Unverified — see below.** |
@@ -49,7 +51,7 @@ pair against an obviously-irrelevant one.
 
 Override with `ORACLE_INDB_SCORE_EXPR` if you need the probability form.
 
-**2. `rerank_indb_utl.sql` was written without a live instance to check it against.** The
+**2. `rerank_indb_utl.sql` and `03_load_models_adb.sql` were written without a live instance to check against.** The
 signature of `DBMS_VECTOR.UTL_TO_RERANK`, its params JSON, and the shape of its JSON result
 have moved between releases. It is included because it is the interesting API — the same call
 routes to an in-database ONNX model or to Cohere, Vertex AI, or OCI Generative AI by changing

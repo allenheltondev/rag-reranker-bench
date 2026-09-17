@@ -1,0 +1,6 @@
+region           = "us-ashburn-1"
+tenancy_ocid     = "ocid1.tenancy.oc1..xxxx"
+compartment_ocid = "ocid1.compartment.oc1..xxxx"
+allowed_ssh_cidr = "203.0.113.4/32"
+par_expires      = "2026-12-31T00:00:00Z"
+# db_admin_password: export TF_VAR_db_admin_password='...' rather than writing it here.

@@ -1,0 +1,16 @@
+#cloud-config
+# Tooling for the application VM: Node for the harness, Python for the model export.
+package_update: true
+packages:
+  - git
+  - gcc
+  - gcc-c++
+  - make
+  - python3.11
+  - python3.11-pip
+  - python3.11-devel
+runcmd:
+  - dnf module -y enable nodejs:22
+  - dnf install -y nodejs
+  - sudo -u opc bash -c 'cd ~ && git clone https://github.com/allenheltondev/rag-reranker-bench.git || true'
+  - echo "rag-reranker-bench VM ready" > /etc/motd

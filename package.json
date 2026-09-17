@@ -13,6 +13,7 @@
     "test": "node --test --import tsx test/*.test.ts",
     "corpus": "tsx src/cli.ts corpus",
     "load": "tsx src/cli.ts load",
+    "models": "tsx src/cli.ts models",
     "doctor": "tsx src/cli.ts doctor",
     "bench": "tsx src/cli.ts bench",
     "report": "tsx src/cli.ts report"
