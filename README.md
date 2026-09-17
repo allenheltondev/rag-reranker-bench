@@ -194,8 +194,17 @@ The two database copies go in `./models/oracle` (mounted into the container at
 unpacks the `.onnx` out of it and puts it where the database can read it:
 
 ```bash
-npm run fetch:model -- <url>        # add --as name.onnx to control the filename
+npm run fetch:model -- https://adwc4pm.objectstorage.us-ashburn-1.oci.customer-oci.com/p/eLddQappgBJ7jNi6Guz9m9LOtYe2u8LWY19GfgU8flFK4N9YgP4kTlrE9Px3pE12/n/adwc4pm/b/OML-Resources/o/all_MiniLM_L12_v2.onnx
 ```
+
+That is Oracle's published `all-MiniLM-L12-v2`, already augmented for `LOAD_ONNX_MODEL`. It is
+384-dimensional and needs no instruction prefixes, so it matches the defaults in `.env.example`
+with nothing to change. The link is a pre-authenticated URL from Oracle's OML-Resources bucket
+and may be rotated; if it stops working, the current one is on the AI Vector Search
+documentation page about importing pretrained models in ONNX format.
+
+`fetch:model` also takes a zip and will pull the `.onnx` out of it, and `--as name.onnx`
+overrides the filename if what lands does not match `ORACLE_EMBED_FILE`.
 
 The two models load independently, which matters because they are not equally easy to obtain:
 
