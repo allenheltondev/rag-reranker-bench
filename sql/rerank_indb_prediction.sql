@@ -4,7 +4,8 @@
 -- text is read, tokenized and scored inside the database and never leaves it. That is the
 -- architectural claim this benchmark measures the cost of.
 --
--- Tokens: ${PREFIX}, ${EMBED_MODEL}, ${SCORE_EXPR}, ${VEC_SOURCE}, ${LEX_SOURCE}, ${FUSED_BODY}
+-- Tokens: ${PREFIX}, ${EMBED_MODEL}, ${QUERY_EMBED_INPUT}, ${SCORE_EXPR}, ${VEC_SOURCE},
+--         ${LEX_SOURCE}, ${FUSED_BODY}
 -- Binds:  :qtext :contains :tenant :owner :pool :n :rrfk :topk
 --
 -- ${SCORE_EXPR} defaults to PREDICTION(...). If your exported cross-encoder loads as a
@@ -12,7 +13,7 @@
 -- ORACLE_INDB_SCORE_EXPR; ordering by a predicted class value ranks nothing.
 
 WITH qv AS (
-  SELECT VECTOR_EMBEDDING(${EMBED_MODEL} USING :qtext AS DATA) AS V FROM DUAL
+  SELECT VECTOR_EMBEDDING(${EMBED_MODEL} USING ${QUERY_EMBED_INPUT} AS DATA) AS V FROM DUAL
 ),
 vec AS (
   SELECT ID, ROWNUM AS RNK FROM (

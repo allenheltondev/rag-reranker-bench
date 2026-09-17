@@ -70,6 +70,28 @@ Note also that `DBMS_HYBRID_VECTOR`'s `search_fusion: "RERANK"` mode is a differ
 the cross-encoder reranking measured here. It re-orders text-search results by their vector
 score. Calling both "reranking" is the single easiest way to confuse a reader.
 
+## Choosing a different embedding model
+
+The database-side embedding model must be an **augmented** ONNX export, with the tokenizer
+inside the graph: `VECTOR_EMBEDDING(model USING :text AS DATA)` hands it raw text and the graph
+has to tokenize. A plain `optimum-cli` export is not that and will not load.
+
+Three things have to line up, and only one of them fails loudly:
+
+| | Where | What happens if it is wrong |
+|---|---|---|
+| `ORACLE_EMBED_DIMS` | `.env`, and the `VECTOR(n, FLOAT32)` column built from it | Fails at insert. Loud. |
+| `ORACLE_EMBED_QUERY_PREFIX` / `_DOC_PREFIX` | `.env` | **Silent.** Recall drops and nothing errors. |
+| Max sequence length | the model | **Silent.** Long chunks are truncated mid-passage. |
+
+Set the dimensions and the prefixes *before* `npm run load`: documents are embedded at insert
+time, so changing either afterwards means reloading the corpus.
+
+Prefixes are model-family specific. MiniLM and GTE want none. E5 requires `query: ` and
+`passage: ` on the respective sides. BGE wants an instruction on the query only. The prefixes
+apply to the embedding model alone — the cross-encoder is given the raw query and the raw
+passage, which is what it was trained on.
+
 ## Why exact vector search by default
 
 `02_vector_index.sql` is not run unless you pass `--vector-index` to `npm run load`. An

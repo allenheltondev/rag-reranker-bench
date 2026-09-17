@@ -4,7 +4,8 @@
 -- implementations score exactly the candidates this produces, so any difference in the final
 -- ordering is attributable to the reranker and not to retrieval.
 --
--- Tokens: ${PREFIX}, ${EMBED_MODEL}, ${VEC_SOURCE}, ${LEX_SOURCE}, ${FUSED_BODY}
+-- Tokens: ${PREFIX}, ${EMBED_MODEL}, ${QUERY_EMBED_INPUT}, ${VEC_SOURCE}, ${LEX_SOURCE},
+--         ${FUSED_BODY}
 -- Binds:  :qtext :contains :tenant :owner :pool :n :rrfk
 --
 -- The three retrieval strategies are the same statement with different arms substituted in by
@@ -13,7 +14,7 @@
 -- `--dump-sql` to print the fully rendered statement.
 
 WITH qv AS (
-  SELECT VECTOR_EMBEDDING(${EMBED_MODEL} USING :qtext AS DATA) AS V FROM DUAL
+  SELECT VECTOR_EMBEDDING(${EMBED_MODEL} USING ${QUERY_EMBED_INPUT} AS DATA) AS V FROM DUAL
 ),
 vec AS (
   SELECT ID, ROWNUM AS RNK FROM (

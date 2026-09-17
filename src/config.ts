@@ -60,6 +60,14 @@ export const oracle = {
   /** Pre-authenticated request base URL for the models bucket (infra/oci output). Must end with '/'. */
   modelsParUrl: process.env.ORACLE_MODELS_PAR_URL ?? '',
   embedFile: process.env.ORACLE_EMBED_FILE ?? 'all_MiniLM_L12_v2.onnx',
+  /**
+   * Instruction prefixes some embedding models require. E5 wants 'query: ' and 'passage: ';
+   * BGE wants an instruction on the query only; MiniLM and GTE want neither. Getting this
+   * wrong does not error - it quietly costs recall - so it is configuration rather than a
+   * hardcoded assumption. Applied to the embedding model only; cross-encoders never use them.
+   */
+  embedQueryPrefix: process.env.ORACLE_EMBED_QUERY_PREFIX ?? '',
+  embedDocPrefix: process.env.ORACLE_EMBED_DOC_PREFIX ?? '',
   rerankFile: process.env.ORACLE_RERANK_FILE ?? 'bge_reranker_base.onnx',
 } as const;
 

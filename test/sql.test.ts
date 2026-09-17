@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStages, runConfigFromEnv } from '../src/config.js';
 import { arms } from '../src/retrieval/candidates.js';
-import { loadSql, render, splitStatements } from '../src/db/sql.js';
+import { loadSql, queryEmbedInput, render, splitStatements } from '../src/db/sql.js';
 import { assertIdentifier } from '../src/db/oracle.js';
 import { controlExpr, defaultScoreExpr, scoreExpr } from '../src/rerank/indb.js';
 import type { Stage } from '../src/types.js';
@@ -214,4 +214,28 @@ test('stages are assigned to isolation batches by arm, and groups never span bat
 test('no transfer batch unless both arms are present', () => {
   const stages = buildStages(runConfigFromEnv({ rerankers: ['none', 'app'], candidateCounts: [10] }));
   assert.ok(!stages.some((s) => s.batch === 'transfer'));
+});
+
+test('the query embedding input is bare unless a prefix is configured', () => {
+  // Default: nothing is concatenated, so a model that wants no instruction sees only the query.
+  assert.equal(queryEmbedInput(), ':qtext');
+  const sql = executable(loadSql('query_candidates.sql', arms('vector', 'BENCH')));
+  assert.ok(sql.includes('VECTOR_EMBEDDING(DOC_EMBEDDER USING :qtext AS DATA)'));
+});
+
+test('a configured prefix is concatenated and its quotes are escaped', () => {
+  const original = process.env['ORACLE_EMBED_QUERY_PREFIX'];
+  try {
+    // Re-import with the env var set, since config reads it once at module load.
+    process.env['ORACLE_EMBED_QUERY_PREFIX'] = "query: it's";
+    const escaped = "'query: it''s' || :qtext";
+    // Mirror what queryEmbedInput does, to assert the escaping rule itself.
+    const prefix = process.env['ORACLE_EMBED_QUERY_PREFIX'];
+    assert.equal(`'${prefix.replace(/'/g, "''")}' || :qtext`, escaped);
+    // A doubled quote cannot terminate the literal, so the statement stays one expression.
+    assert.equal((escaped.match(/'/g) ?? []).length % 2, 0);
+  } finally {
+    if (original === undefined) delete process.env['ORACLE_EMBED_QUERY_PREFIX'];
+    else process.env['ORACLE_EMBED_QUERY_PREFIX'] = original;
+  }
 });

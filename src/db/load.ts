@@ -81,7 +81,8 @@ export async function loadChunks(chunks: Chunk[], batchSize = 50): Promise<numbe
         tags: c.tags.join(','),
         // Title and body are embedded together, matching what the reranker is shown at
         // query time. Embedding a different string than you rerank is a classic quiet bug.
-        embedText: `${c.title}. ${c.content}`,
+        // The document prefix is whatever the chosen embedding model asks for, or nothing.
+        embedText: `${oracle.embedDocPrefix}${c.title}. ${c.content}`,
       }));
       const res = await conn.executeMany(sql, binds, {
         autoCommit: false,

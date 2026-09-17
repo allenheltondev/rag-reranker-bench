@@ -31,9 +31,22 @@ export function render(template: string, tokens: Record<string, string>): string
   return rendered.join('\n');
 }
 
+/**
+ * The expression handed to VECTOR_EMBEDDING for the query.
+ *
+ * A model needing an instruction prefix gets it concatenated in SQL rather than bound, so the
+ * rendered statement shows exactly what was embedded. Single quotes are doubled; the prefix
+ * comes from .env, not from anything a query can influence.
+ */
+export function queryEmbedInput(): string {
+  const prefix = oracle.embedQueryPrefix;
+  return prefix ? `'${prefix.replace(/'/g, "''")}' || :qtext` : ':qtext';
+}
+
 /** Tokens every template shares, derived from config with identifiers validated. */
 export function baseTokens(): Record<string, string> {
   return {
+    QUERY_EMBED_INPUT: queryEmbedInput(),
     PREFIX: assertIdentifier(oracle.schemaPrefix, 'ORACLE_SCHEMA_PREFIX'),
     EMBED_MODEL: assertIdentifier(oracle.embedModel, 'ORACLE_EMBED_MODEL'),
     RERANK_MODEL: assertIdentifier(oracle.rerankModel, 'ORACLE_RERANK_MODEL'),
