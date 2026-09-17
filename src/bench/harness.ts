@@ -76,10 +76,14 @@ export async function captureEnvironment(cfg: RunConfig): Promise<EnvironmentInf
       version: info.version,
       banner: info.banner,
       clientMode: info.clientMode,
-      rerankModel: oracle.rerankModel,
       embedModel: oracle.embedModel,
-      indbRerankApi: oracle.indbRerankApi,
     };
+    // Naming the cross-encoder in a run that never invoked it would put a model in the
+    // report's provenance that contributed nothing to its numbers.
+    if (cfg.rerankers.includes('in-db')) {
+      env.oracle.rerankModel = oracle.rerankModel;
+      env.oracle.indbRerankApi = oracle.indbRerankApi;
+    }
   }
   if (cfg.rerankers.includes('app')) {
     env.app = {

@@ -180,9 +180,10 @@ export interface EnvironmentInfo {
     version: string;
     banner: string;
     clientMode: string;
-    rerankModel: string;
     embedModel: string;
-    indbRerankApi: string;
+    /** Present only when in-database reranking actually ran. */
+    rerankModel?: string;
+    indbRerankApi?: string;
   };
   /** Populated when the app reranker is in use. */
   app?: {

@@ -1,7 +1,7 @@
 import type { BenchRun, Chunk, Query, RankedResult, Stage, StageRun } from '../types.js';
 import {
   bootstrapCI, cv, jaccardAt, kendallTau, mean, median, pairedDifferences, percentile,
-  rankOfBest, scopeViolations, summariseQuality, type Interval, type QualitySummary,
+  rankOfBest, scopeViolations, stddev, summariseQuality, type Interval, type QualitySummary,
 } from './metrics.js';
 import type { ParityReport } from './harness.js';
 
@@ -19,6 +19,8 @@ export interface StageSummary {
   cv: number;
   /** The worst single query's within-query CV, and which query it was. */
   worstQueryCv: { queryId: string; cv: number };
+  /** Median within-query standard deviation, in ms. A ratio alone hides how small the spread is. */
+  sigmaMs: number;
   /** Mean bytes of candidate text crossing the database boundary per query. */
   bytesPerQuery: number;
   quality: QualitySummary;
@@ -66,6 +68,7 @@ export function summariseStage(
   const perQueryCv = [...totalsByQuery.entries()]
     .map(([queryId, xs]) => ({ queryId, cv: cv(xs) }))
     .filter((x) => !Number.isNaN(x.cv));
+  const perQuerySigma = [...totalsByQuery.values()].map((xs) => stddev(xs));
   const worstQueryCv = perQueryCv.reduce(
     (a, b) => (b.cv > a.cv ? b : a),
     perQueryCv[0] ?? { queryId: 'n/a', cv: NaN },
@@ -89,6 +92,7 @@ export function summariseStage(
     meanMs: mean(totals),
     cv: median(perQueryCv.map((x) => x.cv)),
     worstQueryCv,
+    sigmaMs: median(perQuerySigma),
     bytesPerQuery: mean(run.iterations.map((i) => i.bytesFromDb)),
     quality: summariseQuality(perQueryResults, queries, topK),
     attribution: run.iterations[0]?.attribution ?? 'split',
@@ -315,8 +319,10 @@ export function renderMarkdown(
   out.push(`| Memory | ${run.environment.totalMemMb} MB |`);
   if (run.environment.oracle) {
     out.push(`| Oracle | ${run.environment.oracle.version} (${run.environment.oracle.clientMode} client) |`);
-    out.push(`| In-DB rerank model | ${run.environment.oracle.rerankModel} via ${run.environment.oracle.indbRerankApi} |`);
     out.push(`| Embedding model | ${run.environment.oracle.embedModel} |`);
+    if (run.environment.oracle.rerankModel) {
+      out.push(`| In-DB rerank model | ${run.environment.oracle.rerankModel} via ${run.environment.oracle.indbRerankApi} |`);
+    }
   }
   if (run.environment.app) {
     out.push(`| App rerank model | ${run.environment.app.modelPath} |`);
@@ -507,23 +513,27 @@ export function renderMarkdown(
 
   out.push('## Stability');
   out.push('');
-  out.push('Run-to-run noise, measured within each query: the coefficient of variation of a query\'s');
-  out.push('end-to-end time across iterations, summarised across queries. It is computed this way so');
-  out.push('that queries which legitimately cost different amounts do not read as instability. Stages');
-  out.push('under a millisecond will show large percentages from timer resolution alone; read those in');
-  out.push('absolute terms.');
+  out.push('Run-to-run noise, measured within each query: the spread of a query\'s end-to-end time');
+  out.push('across iterations, summarised across queries. Computed within a query so that queries');
+  out.push('which legitimately cost different amounts do not read as instability.');
   out.push('');
-  out.push('| Stage | p50 (ms) | Median within-query CV | Worst query | Its CV |');
-  out.push('|---|---:|---:|---|---:|');
+  out.push('Read the absolute column first. A fast stage shows a large ratio from scheduling and');
+  out.push('timer noise while varying by only a millisecond or two, which cannot move a delta');
+  out.push('measured in hundreds. For the paired numbers above, this table is informational: the');
+  out.push('bootstrap interval on each difference already carries the noise of both of its stages.');
+  out.push('');
+  out.push('| Stage | p50 (ms) | Median within-query σ | As % of p50 | Worst query | Its CV |');
+  out.push('|---|---:|---:|---:|---|---:|');
   for (const s of summaries) {
-    const flag = s.cv > 0.25 && s.p50 >= 1 ? ' ⚠' : '';
-    out.push(`| ${s.stage.id} | ${fmt(s.p50)} | ${fmt(s.cv * 100)}%${flag} | ${s.worstQueryCv.queryId} | ${fmt(s.worstQueryCv.cv * 100)}% |`);
+    // Flag only what could plausibly matter: a large ratio AND a spread big enough to notice.
+    const material = s.cv > 0.25 && s.sigmaMs >= 25;
+    out.push(`| ${s.stage.id} | ${fmt(s.p50)} | ${fmt(s.sigmaMs)} ms | ${fmt(s.cv * 100)}%${material ? ' ⚠' : ''} | ${s.worstQueryCv.queryId} | ${fmt(s.worstQueryCv.cv * 100)}% |`);
   }
   out.push('');
-  const unstable = summaries.filter((s) => s.cv > 0.25 && s.p50 >= 1);
+  const unstable = summaries.filter((s) => s.cv > 0.25 && s.sigmaMs >= 25);
   out.push(unstable.length === 0
-    ? 'No stage over a millisecond exceeds 25% within-query variation; the intervals above are as tight as the iteration count allows.'
-    : `⚠ ${unstable.length} stage(s) over a millisecond exceed 25% within-query variation. More iterations, more repeats, or a quieter machine will tighten their intervals.`);
+    ? 'No stage varies by more than 25 ms between runs of the same query, so nothing here is large enough to affect the differences reported above.'
+    : `⚠ ${unstable.length} stage(s) vary by more than 25 ms between runs of the same query. More iterations, more repeats, or a quieter machine will tighten their intervals.`);
   out.push('');
 
   return out.join('\n');
