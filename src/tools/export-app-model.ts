@@ -63,19 +63,40 @@ export function exportAppModel({ model, outDir, log }: ExportOptions): void {
   }
 
   const py = venvBin('python');
-  log('Installing the exporter (optimum, onnx, onnxruntime) ...');
+  log('Installing the exporter (optimum-onnx, onnx, onnxruntime) ...');
   run(py, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'], 'pip upgrade');
-  run(py, ['-m', 'pip', 'install', '--quiet', 'optimum[exporters]', 'onnx', 'onnxruntime'], 'pip install');
+  // The ONNX exporter lives in optimum-onnx, not in optimum itself: the extras that used to
+  // provide it (`optimum[exporters]`) were dropped in optimum 2.x, and without this package
+  // `optimum-cli export onnx` is not a registered subcommand at all.
+  run(py, ['-m', 'pip', 'install', '--quiet', 'optimum-onnx', 'onnx', 'onnxruntime'], 'pip install');
+
+  // The exact versions matter for reproducing a published number, so record them where the
+  // person running the export will see them.
+  const versions = spawnSync(py, ['-m', 'pip', 'list'], { stdio: 'pipe', encoding: 'utf8' });
+  const relevant = (versions.stdout ?? '')
+    .split('\n')
+    .filter((line) => /^(optimum|optimum-onnx|onnx|onnxruntime|transformers|torch)\s/.test(line));
+  if (relevant.length > 0) {
+    log('Exporter versions:');
+    for (const line of relevant) log(`  ${line.trim()}`);
+  }
 
   log(`Exporting ${model} to ${out} ...`);
   mkdirSync(out, { recursive: true });
   const cli = venvBin('optimum-cli');
   // The console script is the documented interface; the module form is the fallback for
   // installs that do not put scripts on the venv's path.
-  if (existsSync(cli)) {
-    run(cli, ['export', 'onnx', '--model', model, '--task', 'text-classification', '--opset', '17', out], 'ONNX export');
-  } else {
-    run(py, ['-m', 'optimum.exporters.onnx', '--model', model, '--task', 'text-classification', '--opset', '17', out], 'ONNX export');
+  const exportArgs = ['--model', model, '--task', 'text-classification', '--opset', '17', out];
+  try {
+    if (existsSync(cli)) run(cli, ['export', 'onnx', ...exportArgs], 'ONNX export');
+    else run(py, ['-m', 'optimum.exporters.onnx', ...exportArgs], 'ONNX export');
+  } catch (err) {
+    throw new Error(
+      `${(err as Error).message}\n\n`
+      + 'Two things usually cause this. If the output mentions huggingface.co, the download was\n'
+      + 'blocked - check your network or proxy. If it says "unrecognized arguments", the exporter\n'
+      + `package did not install; run "${py} -m pip install optimum-onnx" and try again.`,
+    );
   }
 
   // transformers.js looks for the graph under onnx/, beside config.json and tokenizer.json.
