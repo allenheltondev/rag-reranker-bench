@@ -7,7 +7,7 @@ import { countChunks, loadChunks, runScript } from './db/load.js';
 import { AppReranker } from './rerank/app.js';
 import { scoreExpr } from './rerank/indb.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
-import { renderCsv, renderMarkdown } from './bench/report.js';
+import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
 import type { BenchRun, Chunk, Query, RunConfig } from './types.js';
 
 const args = process.argv.slice(2);
@@ -207,6 +207,7 @@ async function cmdBench(): Promise<void> {
   writeFileSync(resolve(dir, 'raw.json'), `${JSON.stringify(payload, null, 2)}\n`);
   writeFileSync(resolve(dir, 'summary.md'), renderMarkdown(run, queries, parity, chunks));
   writeFileSync(resolve(dir, 'summary.csv'), `${renderCsv(run, queries, chunks)}\n`);
+  writeFileSync(resolve(dir, 'scoring-costs.csv'), `${renderCostsCsv(run)}\n`);
 
   log('');
   log(`Results written to ${dir}`);

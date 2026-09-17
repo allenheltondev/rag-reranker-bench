@@ -103,17 +103,28 @@ export interface IterationResult {
   candidatesScored: number;
 }
 
-/** A named pipeline configuration under test. */
+/**
+ * A named pipeline configuration under test.
+ *
+ * Stages come in three roles. A baseline is plain retrieval at the depth you would deploy
+ * without a reranker. A treatment is a reranked pipeline. A control is the treatment's exact
+ * pipeline with the scoring step removed and nothing else changed, so that
+ * treatment - control isolates the cost of scoring. Treatments and controls that share a
+ * group are measured interleaved, and their differences are computed pairwise.
+ */
 export interface Stage {
-  /** Stable id used in reports and JSON, e.g. "hybrid-rrf+rerank-indb@40". */
+  /** Stable id used in reports and JSON, e.g. "hybrid-rrf+rerank-in-db@40". */
   id: string;
   label: string;
   retrieval: 'vector' | 'lexical' | 'hybrid-rrf';
   reranker: RerankerId;
-  /** Candidates generated and fed to the reranker. For non-reranked stages this equals topK. */
+  /** Candidates generated and fed to the reranker. For baselines this equals topK. */
   candidateCount: number;
   /** Results returned to the model. */
   topK: number;
+  role: 'baseline' | 'treatment' | 'control';
+  /** Stages sharing a group are run interleaved so their timings are paired. */
+  group?: string;
 }
 
 export interface StageRun {

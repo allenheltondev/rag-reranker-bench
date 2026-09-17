@@ -7,7 +7,7 @@ import { InDbReranker } from '../rerank/indb.js';
 import { OracleCandidateSource, type CandidateSource } from '../retrieval/candidates.js';
 import { FixtureCandidateSource } from '../retrieval/fixture.js';
 import type {
-  BenchRun, Chunk, EnvironmentInfo, Query, RunConfig, Stage, StageRun,
+  BenchRun, Chunk, EnvironmentInfo, IterationResult, Query, RunConfig, Stage,
 } from '../types.js';
 import { AppRerankPipeline, InDbRerankPipeline, RetrievalOnlyPipeline, type Pipeline } from './pipelines.js';
 
@@ -31,6 +31,16 @@ export function buildDeps(cfg: RunConfig, chunks: readonly Chunk[]): HarnessDeps
 }
 
 export function pipelineFor(stage: Stage, deps: HarnessDeps): Pipeline {
+  if (stage.role === 'control') {
+    // A control is the treatment without scoring. In the database that is the same statement
+    // with the model call swapped out; in the application it is the candidate fetch alone,
+    // because the app-side treatment is exactly that fetch followed by scoring.
+    if (stage.reranker === 'in-db') {
+      if (!deps.indbReranker) throw new Error('In-database reranking requires the oracle backend.');
+      return new InDbRerankPipeline(stage, deps.indbReranker, true);
+    }
+    return new RetrievalOnlyPipeline(stage, deps.source);
+  }
   switch (stage.reranker) {
     case 'none':
       return new RetrievalOnlyPipeline(stage, deps.source);
@@ -126,6 +136,16 @@ export interface RunOptions {
   onProgress?: (msg: string) => void;
 }
 
+/**
+ * Run every stage and collect timings.
+ *
+ * Ungrouped stages run one after another. Grouped stages - a treatment and its control, and
+ * whatever else shares the group - are run interleaved: within each iteration, every query is
+ * put through every pipeline in the group back to back, and the order rotates each iteration.
+ * That is what makes the differences between them paired: each treatment timing has a control
+ * timing taken seconds apart under the same load, cache state and clock speed, so drift over
+ * the course of a run cancels instead of becoming a systematic error in one direction.
+ */
 export async function runBenchmark(
   stages: readonly Stage[],
   queries: readonly Query[],
@@ -136,27 +156,43 @@ export async function runBenchmark(
   const log = options.onProgress ?? (() => {});
   const startedAt = new Date().toISOString();
   const environment = await captureEnvironment(cfg);
-  const stageRuns: StageRun[] = [];
+  const iterationsByStage = new Map<string, IterationResult[]>(stages.map((s) => [s.id, []]));
 
-  for (const [index, stage] of stages.entries()) {
-    const pipeline = pipelineFor(stage, deps);
-    log(`[${index + 1}/${stages.length}] ${stage.label}`);
+  // Preserve declaration order while batching grouped stages together.
+  const units: Stage[][] = [];
+  const groupIndex = new Map<string, number>();
+  for (const stage of stages) {
+    if (!stage.group) { units.push([stage]); continue; }
+    const at = groupIndex.get(stage.group);
+    if (at === undefined) { groupIndex.set(stage.group, units.length); units.push([stage]); }
+    else units[at]!.push(stage);
+  }
+
+  let done = 0;
+  for (const unit of units) {
+    const pipelines = unit.map((stage) => ({ stage, pipeline: pipelineFor(stage, deps) }));
+    done += unit.length;
+    log(`[${done}/${stages.length}] ${unit.map((s) => s.label).join('  |  ')}`);
 
     // Warmup is per stage, not per run: the first execution of each distinct statement pays
     // for a hard parse, and the first inference pays for model load and allocator warmup.
     for (let w = 0; w < cfg.warmup; w++) {
-      for (const query of queries) await pipeline.run(query);
-    }
-
-    const iterations = [];
-    for (let i = 0; i < cfg.iterations; i++) {
       for (const query of queries) {
-        const result = await pipeline.run(query);
-        result.iteration = i;
-        iterations.push(result);
+        for (const { pipeline } of pipelines) await pipeline.run(query);
       }
     }
-    stageRuns.push({ stage, iterations });
+
+    for (let i = 0; i < cfg.iterations; i++) {
+      const offset = i % pipelines.length;
+      const order = [...pipelines.slice(offset), ...pipelines.slice(0, offset)];
+      for (const query of queries) {
+        for (const { stage, pipeline } of order) {
+          const result = await pipeline.run(query);
+          result.iteration = i;
+          iterationsByStage.get(stage.id)!.push(result);
+        }
+      }
+    }
   }
 
   return {
@@ -164,6 +200,6 @@ export async function runBenchmark(
     finishedAt: new Date().toISOString(),
     config: cfg,
     environment,
-    stages: stageRuns,
+    stages: stages.map((stage) => ({ stage, iterations: iterationsByStage.get(stage.id)! })),
   };
 }

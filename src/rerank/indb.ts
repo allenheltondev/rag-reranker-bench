@@ -18,6 +18,22 @@ export function scoreExpr(): string {
   return oracle.indbScoreExpr || defaultScoreExpr(model);
 }
 
+/**
+ * The control's stand-in for the cross-encoder.
+ *
+ * It must (a) read the same text the model reads, so CLOB access is on both sides of the
+ * subtraction, (b) reference :qtext, so the statement binds identically, and (c) be evaluated
+ * for every candidate, which putting it in the ORDER BY guarantees. What it must not do is any
+ * inference. Everything else about the statement is byte-identical to the treatment.
+ */
+export function defaultControlExpr(): string {
+  return `LENGTH(:qtext || TITLE || '. ' || CONTENT)`;
+}
+
+export function controlExpr(): string {
+  return oracle.indbControlExpr || defaultControlExpr();
+}
+
 export interface InDbOutcome {
   results: RankedResult[];
   /** Wall time for the single statement: filter, retrieve, fuse, rerank, return. */
@@ -31,22 +47,29 @@ export interface InDbOutcome {
  *
  * One statement does the whole pipeline. There is no candidate list in application memory at
  * any point, which is the property being measured - and also the reason this class cannot
- * report a tokenize/infer split the way the application path can. The harness derives the
- * cost of the reranking stage by differencing against the unreranked stage at the same
- * candidate depth, which is an estimate and is labelled as one in the report.
+ * report a tokenize/infer split the way the application path can. The cost of scoring is
+ * instead obtained by subtraction: the same statement is run with `control = true`, which
+ * swaps the cross-encoder for a cheap expression over the same text, and the harness pairs
+ * the two timings per query and iteration. See README, "How the reranking cost is calculated".
  */
 export class InDbReranker {
   constructor(private readonly rrfK: number) {}
 
-  sqlFor(retrieval: Stage['retrieval']): string {
+  sqlFor(retrieval: Stage['retrieval'], control = false): string {
     return loadSql('rerank_indb_prediction.sql', {
       ...arms(retrieval, oracle.schemaPrefix.toUpperCase()),
-      SCORE_EXPR: scoreExpr(),
+      SCORE_EXPR: control ? controlExpr() : scoreExpr(),
     });
   }
 
-  async rerank(query: Query, retrieval: Stage['retrieval'], n: number, topK: number): Promise<InDbOutcome> {
-    const sql = this.sqlFor(retrieval);
+  async rerank(
+    query: Query,
+    retrieval: Stage['retrieval'],
+    n: number,
+    topK: number,
+    control = false,
+  ): Promise<InDbOutcome> {
+    const sql = this.sqlFor(retrieval, control);
     const binds = bindsFor(query, n, this.rrfK, topK);
     return withConnection(async (conn) => {
       const started = performance.now();

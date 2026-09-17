@@ -4,7 +4,7 @@ import { buildStages, runConfigFromEnv } from '../src/config.js';
 import { arms } from '../src/retrieval/candidates.js';
 import { loadSql, render, splitStatements } from '../src/db/sql.js';
 import { assertIdentifier } from '../src/db/oracle.js';
-import { defaultScoreExpr, scoreExpr } from '../src/rerank/indb.js';
+import { controlExpr, defaultScoreExpr, scoreExpr } from '../src/rerank/indb.js';
 import type { Stage } from '../src/types.js';
 
 const RETRIEVALS: Array<Stage['retrieval']> = ['vector', 'lexical', 'hybrid-rrf'];
@@ -113,4 +113,51 @@ test('stage expansion covers the sweep and skips depths below top-K', () => {
   const inDb = ids.filter((id) => id.includes('rerank-in-db'));
   const appSide = ids.filter((id) => id.includes('rerank-app'));
   assert.equal(inDb.length, appSide.length);
+});
+
+test('every treatment has a control at the same depth in the same group', () => {
+  const cfg = runConfigFromEnv({
+    retrievals: ['vector', 'hybrid-rrf'],
+    rerankers: ['none', 'in-db', 'app'],
+    candidateCounts: [10, 40],
+    topK: 10,
+  });
+  const stages = buildStages(cfg);
+  const treatments = stages.filter((s) => s.role === 'treatment');
+  assert.ok(treatments.length > 0);
+  for (const t of treatments) {
+    assert.ok(t.group, `${t.id} has no group`);
+    const control = stages.find(
+      (c) => c.role === 'control' && c.group === t.group && c.reranker === t.reranker,
+    );
+    assert.ok(control, `${t.id} has no control`);
+    assert.equal(control!.candidateCount, t.candidateCount, 'control depth differs from treatment');
+    assert.equal(control!.retrieval, t.retrieval);
+    assert.equal(control!.topK, t.topK);
+  }
+  // Baselines stand alone: they are what you would ship without a reranker, not a control.
+  for (const b of stages.filter((s) => s.role === 'baseline')) {
+    assert.equal(b.group, undefined);
+    assert.equal(b.candidateCount, cfg.topK);
+  }
+});
+
+test('the control statement differs from the treatment only in the scoring expression', () => {
+  const treatment = executable(loadSql('rerank_indb_prediction.sql', {
+    ...arms('hybrid-rrf', 'BENCH'), SCORE_EXPR: scoreExpr(),
+  }));
+  const control = executable(loadSql('rerank_indb_prediction.sql', {
+    ...arms('hybrid-rrf', 'BENCH'), SCORE_EXPR: controlExpr(),
+  }));
+  assert.notEqual(treatment, control);
+  assert.equal(
+    treatment.replace(scoreExpr(), controlExpr()),
+    control,
+    'something other than the scoring expression changed between treatment and control',
+  );
+  assert.ok(!control.includes('PREDICTION'), 'control still calls the model');
+  // The control must bind the same variables and read the same text, or the subtraction is
+  // comparing statements that do different work.
+  assert.ok(controlExpr().includes(':qtext'));
+  assert.ok(controlExpr().includes('CONTENT'));
 });

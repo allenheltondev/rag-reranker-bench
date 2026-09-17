@@ -40,6 +40,12 @@ export const oracle = {
    * `npm run doctor` checks which one your model answers to.
    */
   indbScoreExpr: process.env.ORACLE_INDB_SCORE_EXPR ?? '',
+  /**
+   * The expression the control statement evaluates in place of the cross-encoder. It has to
+   * read the same text the model would read, so that the paired difference is inference and
+   * not CLOB access, and it has to reference :qtext so the statement binds identically.
+   */
+  indbControlExpr: process.env.ORACLE_INDB_CONTROL_EXPR ?? '',
   schemaPrefix: process.env.ORACLE_SCHEMA_PREFIX ?? 'BENCH',
 } as const;
 
@@ -85,9 +91,10 @@ export function runConfigFromEnv(overrides: Partial<RunConfig> = {}): RunConfig 
 /**
  * Expand a run config into the concrete stages to measure.
  *
- * Unreranked retrieval is measured once per strategy (candidateCount == topK, because
- * without a reranker a deeper candidate list is just latency you throw away). Reranked
- * stages are measured across the candidate sweep, which is where the interesting curve is.
+ * Per retrieval strategy: one baseline at top-K depth (what you would ship with no reranker),
+ * and per candidate depth N, a treatment and a control for every reranker. The control is the
+ * treatment with scoring removed, at the same depth, with the same projection, so that the
+ * paired difference is the cost of scoring and nothing else.
  */
 export function buildStages(cfg: RunConfig): Stage[] {
   const stages: Stage[] = [];
@@ -102,12 +109,13 @@ export function buildStages(cfg: RunConfig): Stage[] {
         reranker: 'none',
         candidateCount: cfg.topK,
         topK: cfg.topK,
+        role: 'baseline',
       });
     }
-    // Reranking only earns its place on top of a real candidate pool, so sweep N here.
-    for (const reranker of rerankers) {
-      for (const n of cfg.candidateCounts) {
-        if (n < cfg.topK) continue;
+    for (const n of cfg.candidateCounts) {
+      if (n < cfg.topK) continue;
+      const group = `${retrieval}@${n}`;
+      for (const reranker of rerankers) {
         stages.push({
           id: `${retrieval}+rerank-${reranker}@${n}`,
           label: `${labelFor(retrieval)} + ${labelFor(reranker)} rerank (N=${n})`,
@@ -115,6 +123,18 @@ export function buildStages(cfg: RunConfig): Stage[] {
           reranker,
           candidateCount: n,
           topK: cfg.topK,
+          role: 'treatment',
+          group,
+        });
+        stages.push({
+          id: `${retrieval}+control-${reranker}@${n}`,
+          label: `${labelFor(retrieval)} + ${labelFor(reranker)} control, no scoring (N=${n})`,
+          retrieval,
+          reranker,
+          candidateCount: n,
+          topK: cfg.topK,
+          role: 'control',
+          group,
         });
       }
     }

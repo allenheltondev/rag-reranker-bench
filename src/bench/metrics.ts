@@ -179,3 +179,78 @@ export function scopeViolations(
   }
   return counts;
 }
+
+export function median(values: readonly number[]): number {
+  return percentile(values, 50);
+}
+
+/** Coefficient of variation, stddev / mean. A run-to-run stability figure for one stage. */
+export function cv(values: readonly number[]): number {
+  const m = mean(values);
+  return m === 0 || Number.isNaN(m) ? NaN : stddev(values) / m;
+}
+
+/** mulberry32, so a confidence interval is reproducible for a given seed. */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export interface Interval {
+  lower: number;
+  upper: number;
+}
+
+/**
+ * Percentile bootstrap confidence interval for a statistic of a sample.
+ *
+ * Latency differences are not normally distributed and the sample is small, so a t-interval
+ * would be the wrong tool. Resampling with replacement, recomputing the statistic each time,
+ * and reading off the 2.5th and 97.5th percentiles makes no distributional assumption. The
+ * resampling is seeded so that re-rendering a report from the same raw data gives the same
+ * interval.
+ */
+export function bootstrapCI(
+  values: readonly number[],
+  stat: (xs: readonly number[]) => number = median,
+  resamples = 2000,
+  seed = 1,
+  level = 0.95,
+): Interval {
+  if (values.length === 0) return { lower: NaN, upper: NaN };
+  const rand = seeded(seed);
+  const n = values.length;
+  const stats: number[] = new Array(resamples);
+  const sample: number[] = new Array(n);
+  for (let r = 0; r < resamples; r++) {
+    for (let i = 0; i < n; i++) sample[i] = values[Math.floor(rand() * n)]!;
+    stats[r] = stat(sample);
+  }
+  const alpha = (1 - level) / 2;
+  return { lower: percentile(stats, alpha * 100), upper: percentile(stats, (1 - alpha) * 100) };
+}
+
+/**
+ * Element-wise a[i] - b[i] over observations matched by key.
+ *
+ * This is the whole reason grouped stages run interleaved: a treatment timing minus the control
+ * timing taken moments earlier under the same conditions is a single observation of the cost of
+ * what the treatment adds. The median of those observations is the estimate; median(a) -
+ * median(b) is not the same quantity and is not what gets reported.
+ */
+export function pairedDifferences<K>(
+  a: ReadonlyMap<K, number>,
+  b: ReadonlyMap<K, number>,
+): number[] {
+  const out: number[] = [];
+  for (const [key, va] of a) {
+    const vb = b.get(key);
+    if (vb !== undefined) out.push(va - vb);
+  }
+  return out;
+}

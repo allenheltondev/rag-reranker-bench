@@ -15,9 +15,27 @@ placeholders filled in.
 | `02_vector_index.sql` | Optional approximate vector index. Not used by default (see below). |
 | `03_load_models.sql` | Loads the embedding model and the cross-encoder with `DBMS_VECTOR.LOAD_ONNX_MODEL`. |
 | `query_candidates.sql` | Scope filter → lexical + vector retrieval → RRF fusion. The candidate set both rerankers score. |
-| `rerank_indb_prediction.sql` | The same pipeline with cross-encoder scoring appended, as one statement. |
+| `rerank_indb_prediction.sql` | The same pipeline with cross-encoder scoring appended, as one statement. Also the control: with `${SCORE_EXPR}` swapped for `LENGTH(:qtext \|\| TITLE \|\| '. ' \|\| CONTENT)` it does everything but inference. |
 | `rerank_indb_utl.sql` | Alternative in-database path via `DBMS_VECTOR.UTL_TO_RERANK`. **Unverified — see below.** |
 | `99_teardown.sql` | Drops the table. |
+
+## The control statement
+
+The cost of in-database scoring is calculated as treatment minus control, paired per query
+and iteration (README, "How the reranking cost is calculated"). The control is
+`rerank_indb_prediction.sql` rendered with the scoring expression replaced by
+`LENGTH(:qtext || TITLE || '. ' || CONTENT)`. That expression is chosen so the control still
+reads the same CLOB text the model reads, still binds `:qtext`, and is still evaluated for all
+N rows (it is in the `ORDER BY`). Override with `ORACLE_INDB_CONTROL_EXPR` if your treatment
+expression reads different columns — the two must touch the same data or the subtraction
+measures I/O, not inference.
+
+Before publishing, confirm the two statements plan identically up to the projection:
+
+```sql
+EXPLAIN PLAN FOR <treatment from --dump-sql>;   SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);
+EXPLAIN PLAN FOR <control from --dump-sql>;     SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);
+```
 
 ## Three things to verify before quoting a number
 

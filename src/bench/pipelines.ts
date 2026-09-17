@@ -94,12 +94,19 @@ export class AppRerankPipeline implements Pipeline {
   }
 }
 
-/** Retrieve and rerank in the database: one statement, identifiers and scores come back. */
+/**
+ * Retrieve and rerank in the database: one statement, identifiers and scores come back.
+ * With `control` set, the same statement runs without the cross-encoder.
+ */
 export class InDbRerankPipeline implements Pipeline {
-  constructor(readonly stage: Stage, private readonly reranker: InDbReranker) {}
+  constructor(
+    readonly stage: Stage,
+    private readonly reranker: InDbReranker,
+    private readonly control = false,
+  ) {}
 
   sql(): string {
-    return this.reranker.sqlFor(this.stage.retrieval);
+    return this.reranker.sqlFor(this.stage.retrieval, this.control);
   }
 
   async run(query: Query): Promise<IterationResult> {
@@ -109,6 +116,7 @@ export class InDbRerankPipeline implements Pipeline {
       this.stage.retrieval,
       this.stage.candidateCount,
       this.stage.topK,
+      this.control,
     );
     const timings = zero();
     timings.total = performance.now() - started;
@@ -119,7 +127,7 @@ export class InDbRerankPipeline implements Pipeline {
       timings,
       results: outcome.results,
       bytesFromDb: outcome.bytes,
-      candidatesScored: this.stage.candidateCount,
+      candidatesScored: this.control ? 0 : this.stage.candidateCount,
     };
   }
 }

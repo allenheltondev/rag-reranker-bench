@@ -35,9 +35,9 @@ Fairness over flattery, and an honest tradeoff over a winner. Concretely:
 1. **Only one variable changes.** Same model, same candidates, same fusion, same top-K. The
    candidate-parity check is run as a preflight and reported, so "we held retrieval constant"
    is a measurement rather than a claim.
-2. **Added latency at equal quality is the headline number.** Not total pipeline latency,
-   which is dominated by whatever else is in the stage. Every reranked stage is differenced
-   against the same retrieval strategy with no reranking.
+2. **The cost of scoring is isolated by subtraction against a matched control,** measured
+   pairwise. See the next section — this is the number the article is about, and it is
+   calculated, not read off a clock.
 3. **Quality is allowed to say no.** Every stage reports nDCG@10, Recall@10 and MRR@10 against
    graded judgments, plus a per-query table of where the best chunk landed. If reranking makes
    a query worse, that shows up as a row, not as a rounding error inside an average.
@@ -46,14 +46,70 @@ Fairness over flattery, and an honest tradeoff over a winner. Concretely:
    application path returns every candidate's full text so it can be scored.
 5. **Nothing is reported more precisely than it was measured.** The in-database path is one
    SQL statement and cannot be decomposed from outside the database, so it reports a total and
-   no sub-phases. Inventing a tokenize/infer split for it would be fiction.
+   no sub-phases. Its scoring cost comes from the subtraction below, with an interval.
+
+### How the reranking cost is calculated
+
+The in-database path is one statement. There is no point between "query sent" and "rows back"
+where application code can read a clock, so the cost of the cross-encoder cannot be observed
+directly. It can be calculated, if the calculation is set up carefully. Three things make it
+technically sound:
+
+**A matched control.** For every treatment at depth N there is a control: the *same
+statement* with the cross-encoder expression replaced by a cheap one that reads the same text
+(`LENGTH(:qtext || TITLE || '. ' || CONTENT)`). Same scope filter, same retrieval arms, same
+fusion, same N-row sort, same identifier-and-score projection, same binds. The only work
+removed is inference. `npm run bench -- --dump-sql` prints both so the claim can be checked
+by diffing them, and a unit test asserts they differ in that expression alone.
+
+The application path gets the same treatment: its control is the candidate fetch at depth N
+with no scoring, which is exactly what the app-side pipeline does before it scores.
+
+**Paired, interleaved measurement.** Treatment and control are not run as separate batches.
+Within each iteration every query goes through the treatment and the control back to back,
+and the order rotates between iterations. Each observation of the treatment therefore has a
+partner observation of the control taken moments earlier under the same load, cache state and
+clock speed. The quantity reported is
+
+```
+scoring(N) = median over (query, iteration) of [ T_treatment − T_control ]
+```
+
+which is the median of per-observation differences. It is **not** `p50(treatment) −
+p50(control)`; that is a different quantity, and drift over a run biases it in whichever
+direction the drift happened to go. A seeded bootstrap (2,000 resamples) gives a 95%
+interval on the median, so re-rendering a report from the same raw data reproduces the
+interval exactly.
+
+**A built-in validity check.** The application path can be measured *both* ways: by
+subtraction, exactly as the in-database path has to be, and directly, with clocks around
+tokenize, infer and sort. The report prints both side by side. If the method is sound the
+two agree, and whatever gap exists is the measurement error to apply to every subtracted
+number in the report. On the fixture backend they agree within 1.5%.
+
+The same machinery gives one more calculable number. The two controls do identical work up
+to the projection — one returns identifiers and a number, the other identifiers and every
+candidate's full text — so their paired difference is the cost of moving the text out of the
+database and nothing else:
+
+```
+transfer(N) = median over (query, iteration) of [ T_app_control − T_indb_control ]
+```
+
+What this does not remove: the treatment and control are different SQL text, so they are
+different cursors and could in principle get different plans. They should not — the plan is
+identical up to the final projection — but for a result you intend to publish, confirm it
+with `EXPLAIN PLAN` on both statements from `--dump-sql`.
 
 ### Metrics collected
 
 | Metric | Why it is here |
 |---|---|
 | p50 / p95 / p99 end-to-end | The number a user feels. p95 matters more than p50 for a reranker. |
-| Added p50 vs no rerank | Isolates the scoring stage from candidate generation. |
+| Scoring cost, median Δ with 95% CI | Treatment minus matched control, paired. Isolates inference from everything else. |
+| Transfer cost, median Δ with 95% CI | App control minus in-DB control, paired. The cost of the text leaving the database. |
+| Subtraction vs direct, app path | Validates the subtraction method against clocks where clocks exist. |
+| CV per stage | Run-to-run stability. Flags stages whose intervals should not be trusted yet. |
 | nDCG@10, Recall@10, MRR@10 | Whether the reordering was worth paying for. |
 | Bytes from DB per query | The architectural cost of scoring somewhere else. |
 | Top-K Jaccard and Kendall tau | Do the two paths agree? Same model, same input — they should. |
@@ -119,7 +175,9 @@ silently returning a class instead of a score.
 npm run bench
 ```
 
-Results land in `results/<timestamp>/` as `raw.json`, `summary.md` and `summary.csv`.
+Results land in `results/<timestamp>/` as `raw.json`, `summary.md`, `summary.csv` and
+`scoring-costs.csv`. Re-rendering a report from `raw.json` reproduces every number,
+intervals included.
 
 ```bash
 npm run bench -- --retrievals hybrid-rrf --candidates 10,20,40,80 --iterations 30

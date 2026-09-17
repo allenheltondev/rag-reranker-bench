@@ -86,3 +86,37 @@ test('kendall tau ignores items missing from one list', () => {
   // common items are a,b in the same relative order
   assert.equal(kendallTau(ranked('a', 'z', 'b'), ranked('a', 'b'), ), 1);
 });
+
+import { bootstrapCI, cv, median, pairedDifferences } from '../src/bench/metrics.js';
+
+test('median and cv', () => {
+  assert.equal(median([3, 1, 2]), 2);
+  assert.equal(median([1, 2, 3, 4]), 2.5);
+  assert.equal(cv([2, 4, 6]), 2 / 4);
+  assert.ok(Number.isNaN(cv([])));
+});
+
+test('bootstrap CI brackets the statistic, is seeded, and narrows with more data', () => {
+  const xs = Array.from({ length: 40 }, (_, i) => 100 + (i % 7));
+  const ci = bootstrapCI(xs, median, 500, 7);
+  assert.ok(ci.lower <= median(xs) && median(xs) <= ci.upper);
+  assert.deepEqual(bootstrapCI(xs, median, 500, 7), ci, 'same seed must give the same interval');
+  const wide = bootstrapCI([100, 130, 90, 140, 105], median, 500, 7);
+  assert.ok(wide.upper - wide.lower > ci.upper - ci.lower);
+  assert.ok(Number.isNaN(bootstrapCI([], median).lower));
+});
+
+test('paired differences match observations by key and skip unmatched ones', () => {
+  const a = new Map([['q1:0', 10], ['q2:0', 20], ['q3:0', 30]]);
+  const b = new Map([['q1:0', 4], ['q2:0', 5]]);
+  assert.deepEqual(pairedDifferences(a, b), [6, 15]);
+});
+
+test('median of paired differences is not the difference of medians', () => {
+  const control = new Map([['a', 100], ['b', 200], ['c', 300]]);
+  const treatment = new Map([['a', 180], ['b', 210], ['c', 340]]);
+  // Per-observation added cost is [80, 10, 40]; its median is 40.
+  assert.equal(median(pairedDifferences(treatment, control)), 40);
+  // The marginal medians are 210 and 200, so the naive subtraction says 10.
+  assert.equal(median([...treatment.values()]) - median([...control.values()]), 10);
+});
