@@ -60,7 +60,7 @@ same checkpoint:
 
 ```bash
 scripts/export-reranker-onnx.sh
-npm run corpus && npm run load && npm run models && npm run doctor
+npm run corpus && npm run models && npm run load && npm run doctor
 npm run bench -- --repeats 3
 ```
 

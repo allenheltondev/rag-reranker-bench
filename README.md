@@ -160,9 +160,9 @@ path; the cloud README maps each one onto its equivalent.
 ### 1. A database
 
 ```bash
-cp .env.example .env          # fill in ORACLE_PASSWORD
+cp .env.example .env          # set ORACLE_SYS_PASSWORD and ORACLE_PASSWORD
 docker compose up -d
-docker compose logs -f oracle # wait for "DATABASE IS READY TO USE!"
+docker compose logs -f oracle # wait for "DATABASE IS READY TO USE!" (several minutes first time)
 ```
 
 Check the image tag: in-database reranking needs a release that can load an ONNX reranking

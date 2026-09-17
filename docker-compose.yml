@@ -8,9 +8,10 @@
 #   docker compose up -d
 #   docker compose logs -f oracle     # wait for "DATABASE IS READY TO USE!"
 #
-# Then create the benchmark user and the directory object the model loader reads from. Both
-# are in sql/00_user.sql (uncomment the two directory lines and set the tablespace to USERS):
-#   docker compose exec -T oracle sqlplus -s / as sysdba < sql/00_user.sql
+# Then create the benchmark user and the ONNX_DIR directory object, both in sql/00_user.sql.
+# Connect to the FREEPDB1 service, not "/ as sysdba", or the user lands in the root container:
+#   docker compose exec -T oracle \
+#     sqlplus -s "sys/$ORACLE_SYS_PASSWORD@localhost:1521/FREEPDB1 as sysdba" < sql/00_user.sql
 
 services:
   oracle:
