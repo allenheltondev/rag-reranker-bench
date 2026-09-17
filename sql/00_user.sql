@@ -2,8 +2,9 @@
 -- (Oracle Free container). Everything else in this repo runs as this user through `npm run`.
 --
 --   Autonomous:  sql admin@<TP connect string> @sql/00_user.sql
---   Container:   docker compose exec -T oracle \
---                  sqlplus -s "sys/$ORACLE_SYS_PASSWORD@localhost:1521/FREEPDB1 as sysdba" < sql/00_user.sql
+--   Container:   docker compose cp sql/00_user.sql oracle:/tmp/00_user.sql
+--                docker compose exec oracle bash -c "sed -i 's/\r$//' /tmp/00_user.sql && sqlplus -s 'sys/<pw>@localhost:1521/FREEPDB1 as sysdba' @/tmp/00_user.sql"
+--   (the sed strips carriage returns in case the file was checked out with CRLF on Windows)
 --
 -- On the container, connect to the FREEPDB1 service as shown, not "/ as sysdba": that lands in
 -- the root container, where a plain user name is rejected.
