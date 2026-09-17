@@ -65,14 +65,14 @@ by diffing them, and a unit test asserts they differ in that expression alone.
 The application path gets the same treatment: its control is the candidate fetch at depth N
 with no scoring, which is exactly what the app-side pipeline does before it scores.
 
-**Paired, interleaved measurement.** Treatment and control are not run as separate batches.
-Within each iteration every query goes through the treatment and the control back to back,
-and the order rotates between iterations. Each observation of the treatment therefore has a
-partner observation of the control taken moments earlier under the same load, cache state and
-clock speed. The quantity reported is
+**Paired, interleaved measurement — within an arm.** A treatment and its control are not run
+as separate batches. Within each iteration every query goes through the treatment and the
+control back to back, and the order rotates between iterations. Each observation of the
+treatment therefore has a partner observation of the control taken moments earlier under
+the same load, cache state and clock speed. The quantity reported is
 
 ```
-scoring(N) = median over (query, iteration) of [ T_treatment − T_control ]
+scoring(N) = median over (query, repeat, iteration) of [ T_treatment − T_control ]
 ```
 
 which is the median of per-observation differences. It is **not** `p50(treatment) −
@@ -81,19 +81,33 @@ direction the drift happened to go. A seeded bootstrap (2,000 resamples) gives a
 interval on the median, so re-rendering a report from the same raw data reproduces the
 interval exactly.
 
+**Isolation — between arms.** Nothing is subtracted across the in-database and application
+arms, so they do not interleave. They run as separate batches with a full reset between:
+connection pool closed, model disposed, heap collected, an optional shell command (a
+container restart, if you want a true teardown), then a quiesce period. Every unit warms up
+again afterwards. Batch order is `baseline → in-db → app → transfer`. What this removes is
+carryover: ONNX Runtime threads spin-wait briefly after inference, the database's own
+runtime does likewise, CPU boost state and buffer caches persist. None of that can now land
+in the other arm's measurements.
+
+**Repeats.** `--repeats R` runs the entire protocol R times, resets included, and the report
+recomputes every scoring cost from each repeat alone. The spread between repeats is the
+repeatability figure — what the number would do if you ran the benchmark again.
+
 **A built-in validity check.** The application path can be measured *both* ways: by
 subtraction, exactly as the in-database path has to be, and directly, with clocks around
 tokenize, infer and sort. The report prints both side by side. If the method is sound the
 two agree, and whatever gap exists is the measurement error to apply to every subtracted
 number in the report. On the fixture backend they agree within 1.5%.
 
-The same machinery gives one more calculable number. The two controls do identical work up
-to the projection — one returns identifiers and a number, the other identifiers and every
-candidate's full text — so their paired difference is the cost of moving the text out of the
-database and nothing else:
+The same machinery gives one more calculable number. The `transfer` batch holds only the two
+controls, run interleaved — they do identical work up to the projection (one returns
+identifiers and a number, the other identifiers and every candidate's full text) and neither
+runs inference, so there is nothing to carry over between them. Their paired difference is the
+cost of moving the text out of the database and nothing else:
 
 ```
-transfer(N) = median over (query, iteration) of [ T_app_control − T_indb_control ]
+transfer(N) = median over (query, repeat, iteration) of [ T_app_control − T_indb_control ]
 ```
 
 What this does not remove: the treatment and control are different SQL text, so they are
@@ -181,6 +195,8 @@ intervals included.
 
 ```bash
 npm run bench -- --retrievals hybrid-rrf --candidates 10,20,40,80 --iterations 30
+npm run bench -- --repeats 3       # full protocol three times; report shows between-repeat spread
+npm run bench -- --reset-cmd "docker compose restart oracle && sleep 90"   # true teardown between arms
 npm run bench -- --dump-sql        # print the exact SQL every stage runs
 npm run report -- --run results/<timestamp>/raw.json
 ```

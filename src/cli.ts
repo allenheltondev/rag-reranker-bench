@@ -38,6 +38,12 @@ function overridesFromFlags(): Partial<RunConfig> {
   if (retrievals) o.retrievals = retrievals.split(',') as RunConfig['retrievals'];
   const queries = opt('queries');
   if (queries) o.queries = Number(queries);
+  const repeats = opt('repeats');
+  if (repeats) o.repeats = Number(repeats);
+  const quiesce = opt('quiesce-ms');
+  if (quiesce) o.quiesceMs = Number(quiesce);
+  const reset = opt('reset-cmd');
+  if (reset) o.resetCommand = reset;
   return o;
 }
 
@@ -184,7 +190,7 @@ async function cmdBench(): Promise<void> {
     return;
   }
 
-  log(`Backend: ${cfg.backend} · ${queries.length} queries · ${stages.length} stages · ${cfg.iterations} iterations (+${cfg.warmup} warmup)`);
+  log(`Backend: ${cfg.backend} · ${queries.length} queries · ${stages.length} stages · ${cfg.iterations} iterations (+${cfg.warmup} warmup) · ${cfg.repeats} repeat(s)`);
   log('');
 
   let parity;
@@ -242,6 +248,9 @@ Flags for bench:
   --iterations 20            Measured iterations per query per stage
   --warmup 5                 Unmeasured iterations per query per stage
   --queries N                Use only the first N queries
+  --repeats R                Full repetitions of the protocol; report shows between-repeat spread
+  --quiesce-ms 5000          Idle time after each reset between isolation batches
+  --reset-cmd "<shell>"      Command to run at each reset, e.g. "docker compose restart oracle && sleep 90"
   --dump-sql                 Print the rendered SQL for every stage and exit
 
 Flags for doctor:

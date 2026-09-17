@@ -33,6 +33,7 @@ export class RetrievalOnlyPipeline implements Pipeline {
     return {
       queryId: query.id,
       iteration: 0,
+      repeat: 0,
       attribution: 'split',
       timings,
       results: batch.candidates.slice(0, this.stage.topK).map((c, i) => ({
@@ -85,6 +86,7 @@ export class AppRerankPipeline implements Pipeline {
     return {
       queryId: query.id,
       iteration: 0,
+      repeat: 0,
       attribution: 'split',
       timings,
       results: outcome.results,
@@ -123,6 +125,7 @@ export class InDbRerankPipeline implements Pipeline {
     return {
       queryId: query.id,
       iteration: 0,
+      repeat: 0,
       attribution: 'total-only',
       timings,
       results: outcome.results,

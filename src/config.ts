@@ -84,6 +84,9 @@ export function runConfigFromEnv(overrides: Partial<RunConfig> = {}): RunConfig 
     rrfK: num(process.env.BENCH_RRF_K, 60),
     corpusSize: num(process.env.CORPUS_SIZE, 480),
     seed: num(process.env.CORPUS_SEED, 20250917),
+    repeats: num(process.env.BENCH_REPEATS, 1),
+    quiesceMs: num(process.env.BENCH_QUIESCE_MS, 5000),
+    resetCommand: process.env.BENCH_RESET_CMD ?? '',
   };
   return { ...base, ...overrides };
 }
@@ -95,10 +98,17 @@ export function runConfigFromEnv(overrides: Partial<RunConfig> = {}): RunConfig 
  * and per candidate depth N, a treatment and a control for every reranker. The control is the
  * treatment with scoring removed, at the same depth, with the same projection, so that the
  * paired difference is the cost of scoring and nothing else.
+ *
+ * Stages are assigned to isolation batches by arm: everything in-database, then everything
+ * application-side, then a transfer batch holding only the two controls. Pairs are interleaved
+ * within a batch; batches are separated by a reset. The transfer controls are duplicates of
+ * the arm controls on purpose - neither runs inference, so interleaving them carries nothing
+ * over, and it keeps the app-minus-in-DB transfer number paired.
  */
 export function buildStages(cfg: RunConfig): Stage[] {
   const stages: Stage[] = [];
   const rerankers = cfg.rerankers.filter((r) => r !== 'none');
+  const depths = cfg.candidateCounts.filter((n) => n >= cfg.topK);
 
   for (const retrieval of cfg.retrievals) {
     if (cfg.rerankers.includes('none')) {
@@ -110,12 +120,15 @@ export function buildStages(cfg: RunConfig): Stage[] {
         candidateCount: cfg.topK,
         topK: cfg.topK,
         role: 'baseline',
+        batch: 'baseline',
       });
     }
-    for (const n of cfg.candidateCounts) {
-      if (n < cfg.topK) continue;
-      const group = `${retrieval}@${n}`;
-      for (const reranker of rerankers) {
+  }
+
+  for (const reranker of rerankers) {
+    for (const retrieval of cfg.retrievals) {
+      for (const n of depths) {
+        const group = `${reranker}:${retrieval}@${n}`;
         stages.push({
           id: `${retrieval}+rerank-${reranker}@${n}`,
           label: `${labelFor(retrieval)} + ${labelFor(reranker)} rerank (N=${n})`,
@@ -125,6 +138,7 @@ export function buildStages(cfg: RunConfig): Stage[] {
           topK: cfg.topK,
           role: 'treatment',
           group,
+          batch: reranker,
         });
         stages.push({
           id: `${retrieval}+control-${reranker}@${n}`,
@@ -135,7 +149,29 @@ export function buildStages(cfg: RunConfig): Stage[] {
           topK: cfg.topK,
           role: 'control',
           group,
+          batch: reranker,
         });
+      }
+    }
+  }
+
+  if (rerankers.includes('in-db') && rerankers.includes('app')) {
+    for (const retrieval of cfg.retrievals) {
+      for (const n of depths) {
+        const group = `transfer:${retrieval}@${n}`;
+        for (const reranker of ['in-db', 'app'] as const) {
+          stages.push({
+            id: `${retrieval}+transfer-${reranker}@${n}`,
+            label: `${labelFor(retrieval)} + ${labelFor(reranker)} control for transfer (N=${n})`,
+            retrieval,
+            reranker,
+            candidateCount: n,
+            topK: cfg.topK,
+            role: 'control',
+            group,
+            batch: 'transfer',
+          });
+        }
       }
     }
   }

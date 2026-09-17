@@ -106,10 +106,12 @@ export interface ScoringCost {
   directMedian?: number;
 }
 
-const obsKey = (queryId: string, iteration: number): string => `${queryId}:${iteration}`;
+const obsKey = (i: { queryId: string; repeat: number; iteration: number }): string =>
+  `${i.queryId}:${i.repeat}:${i.iteration}`;
 
-function totalsByObservation(run: StageRun): Map<string, number> {
-  return new Map(run.iterations.map((i) => [obsKey(i.queryId, i.iteration), i.timings.total]));
+function totalsByObservation(run: StageRun, repeat?: number): Map<string, number> {
+  const its = repeat === undefined ? run.iterations : run.iterations.filter((i) => i.repeat === repeat);
+  return new Map(its.map((i) => [obsKey(i), i.timings.total]));
 }
 
 /**
@@ -120,7 +122,7 @@ function totalsByObservation(run: StageRun): Map<string, number> {
  * one measurement of "what scoring added". The median of those is the estimate and a seeded
  * bootstrap gives its interval.
  */
-export function scoringCosts(run: BenchRun): ScoringCost[] {
+export function scoringCosts(run: BenchRun, repeat?: number): ScoringCost[] {
   const rows: ScoringCost[] = [];
   for (const treatment of run.stages) {
     if (treatment.stage.role !== 'treatment' || !treatment.stage.group) continue;
@@ -130,7 +132,10 @@ export function scoringCosts(run: BenchRun): ScoringCost[] {
     );
     if (!control) continue;
 
-    const deltas = pairedDifferences(totalsByObservation(treatment), totalsByObservation(control));
+    const deltas = pairedDifferences(
+      totalsByObservation(treatment, repeat),
+      totalsByObservation(control, repeat),
+    );
     if (deltas.length === 0) continue;
 
     const row: ScoringCost = {
@@ -148,7 +153,9 @@ export function scoringCosts(run: BenchRun): ScoringCost[] {
     };
     if (treatment.iterations[0]?.attribution === 'split' && treatment.stage.reranker !== 'none') {
       row.directMedian = median(
-        treatment.iterations.map((i) => i.timings.tokenize + i.timings.infer + i.timings.sort),
+        treatment.iterations
+          .filter((i) => repeat === undefined || i.repeat === repeat)
+          .map((i) => i.timings.tokenize + i.timings.infer + i.timings.sort),
       );
     }
     rows.push(row);
@@ -170,13 +177,16 @@ export interface TransferCost {
 /**
  * What it costs to bring the candidate text to the application.
  *
- * The two controls do identical work up to the projection: one returns identifiers and a
- * number, the other returns identifiers and the full text. Their paired difference is the
- * serialisation and transfer of that text, and nothing else.
+ * Measured from the transfer batch, which holds only the two controls, run interleaved: they
+ * do identical work up to the projection - one returns identifiers and a number, the other
+ * identifiers and the full text - and neither runs inference, so there is nothing to carry
+ * over between them. Their paired difference is the serialisation and transfer of that text.
  */
 export function transferCosts(run: BenchRun): TransferCost[] {
   const rows: TransferCost[] = [];
-  const groups = new Set(run.stages.map((s) => s.stage.group).filter((g): g is string => !!g));
+  const groups = new Set(
+    run.stages.map((s) => s.stage.group).filter((g): g is string => !!g && g.startsWith('transfer:')),
+  );
   for (const group of groups) {
     const app = run.stages.find((s) => s.stage.group === group && s.stage.role === 'control' && s.stage.reranker === 'app');
     const indb = run.stages.find((s) => s.stage.group === group && s.stage.role === 'control' && s.stage.reranker === 'in-db');
@@ -292,7 +302,10 @@ export function renderMarkdown(
     out.push(`| App execution | ${run.environment.app.executionProviders.join(', ')}, dtype ${run.environment.app.dtype}, intra-op threads ${run.environment.app.intraOpThreads} |`);
   }
   out.push('');
-  out.push(`Queries: ${queries.length} · iterations: ${run.config.iterations} · warmup: ${run.config.warmup} · top-K: ${k} · RRF k: ${run.config.rrfK}`);
+  out.push(`Queries: ${queries.length} · iterations: ${run.config.iterations} · warmup: ${run.config.warmup} · repeats: ${run.config.repeats} · top-K: ${k} · RRF k: ${run.config.rrfK}`);
+  const batches = [...new Set(run.stages.map((s) => s.stage.batch))];
+  out.push('');
+  out.push(`Isolation batches, in order, with a reset between each: ${batches.map((b) => `\`${b}\``).join(' → ')}. Quiesce ${run.config.quiesceMs} ms${run.config.resetCommand ? `, reset command \`${run.config.resetCommand}\`` : ''}.`);
   out.push('');
 
   if (parity) {
@@ -386,9 +399,10 @@ export function renderMarkdown(
   if (transfers.length > 0) {
     out.push('## Cost of moving the candidate text to the application');
     out.push('');
-    out.push('The two controls do identical work up to the projection. One returns identifiers and a');
-    out.push('number; the other returns identifiers and every candidate\'s full text. Their paired');
-    out.push('difference is the cost of that text leaving the database.');
+    out.push('From the transfer batch: the two controls alone, run interleaved. They do identical work');
+    out.push('up to the projection - one returns identifiers and a number, the other identifiers and');
+    out.push('every candidate\'s full text - and neither runs inference. Their paired difference is');
+    out.push('the cost of that text leaving the database.');
     out.push('');
     out.push('| Retrieval | N | Text returned (app) | Returned (in-DB) | Transfer, median Δ (ms) | 95% CI | Pairs |');
     out.push('|---|---:|---:|---:|---:|---|---:|');
@@ -450,6 +464,25 @@ export function renderMarkdown(
   out.push('');
   out.push('`—` means the best-graded chunk for that query never reached the context window.');
   out.push('');
+
+  if (run.config.repeats > 1) {
+    out.push('## Repeatability across repeats');
+    out.push('');
+    out.push('The scoring cost recomputed from each full repetition of the protocol on its own. The');
+    out.push('spread between repeats is what the number would do if you ran the benchmark again.');
+    out.push('');
+    const perRepeat = Array.from({ length: run.config.repeats }, (_, r) => scoringCosts(run, r));
+    out.push(`| Retrieval | N | Where | ${perRepeat.map((_, r) => `Repeat ${r + 1} (ms)`).join(' | ')} | Spread (ms) | Spread % |`);
+    out.push(`|---|---:|---|${perRepeat.map(() => '---:').join('|')}|---:|---:|`);
+    for (const c of scoringCosts(run)) {
+      const vals = perRepeat.map((rows) => rows.find((x) => x.treatmentId === c.treatmentId)?.medianDelta ?? NaN);
+      const spread = Math.max(...vals) - Math.min(...vals);
+      const pct = c.medianDelta === 0 ? NaN : (spread / c.medianDelta) * 100;
+      const where = c.reranker === 'in-db' ? 'in database' : 'application';
+      out.push(`| ${c.retrieval} | ${c.candidateCount} | ${where} | ${vals.map((v) => fmt(v, 2)).join(' | ')} | ${fmt(spread, 2)} | ${fmt(pct)}% |`);
+    }
+    out.push('');
+  }
 
   out.push('## Stability');
   out.push('');

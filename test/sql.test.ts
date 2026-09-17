@@ -161,3 +161,35 @@ test('the control statement differs from the treatment only in the scoring expre
   assert.ok(controlExpr().includes(':qtext'));
   assert.ok(controlExpr().includes('CONTENT'));
 });
+
+test('stages are assigned to isolation batches by arm, and groups never span batches', () => {
+  const cfg = runConfigFromEnv({
+    retrievals: ['hybrid-rrf'],
+    rerankers: ['none', 'in-db', 'app'],
+    candidateCounts: [10, 40],
+    topK: 10,
+  });
+  const stages = buildStages(cfg);
+  const order = [...new Set(stages.map((s) => s.batch))];
+  assert.deepEqual(order, ['baseline', 'in-db', 'app', 'transfer']);
+  const batchOfGroup = new Map<string, string>();
+  for (const s of stages) {
+    if (!s.group) continue;
+    const seen = batchOfGroup.get(s.group);
+    if (seen) assert.equal(seen, s.batch, `group ${s.group} spans batches`);
+    batchOfGroup.set(s.group, s.batch);
+  }
+  // The transfer batch is the two controls only, one per depth, and never a treatment.
+  const transfer = stages.filter((s) => s.batch === 'transfer');
+  assert.equal(transfer.length, 4);
+  assert.ok(transfer.every((s) => s.role === 'control'));
+  assert.deepEqual(
+    transfer.map((s) => s.reranker).sort(),
+    ['app', 'app', 'in-db', 'in-db'],
+  );
+});
+
+test('no transfer batch unless both arms are present', () => {
+  const stages = buildStages(runConfigFromEnv({ rerankers: ['none', 'app'], candidateCounts: [10] }));
+  assert.ok(!stages.some((s) => s.batch === 'transfer'));
+});

@@ -88,6 +88,8 @@ export interface Timings {
 export interface IterationResult {
   queryId: string;
   iteration: number;
+  /** Which full repetition of the protocol this observation belongs to. */
+  repeat: number;
   /**
    * Whether the timing breakdown is real or whether only the total is trustworthy.
    * In-database reranking is one statement, so its stages cannot be observed from outside;
@@ -125,6 +127,12 @@ export interface Stage {
   role: 'baseline' | 'treatment' | 'control';
   /** Stages sharing a group are run interleaved so their timings are paired. */
   group?: string;
+  /**
+   * Isolation batch. Batches run one after another with a full reset between them (pool
+   * closed, model disposed, quiesce, optional external command), so that nothing one arm
+   * does can carry over into the other's measurements. Groups never span batches.
+   */
+  batch: string;
 }
 
 export interface StageRun {
@@ -152,6 +160,12 @@ export interface RunConfig {
   rrfK: number;
   corpusSize: number;
   seed: number;
+  /** Full repetitions of the whole protocol, each with resets. Between-repeat spread is the repeatability figure. */
+  repeats: number;
+  /** Idle time after a reset before measuring resumes. */
+  quiesceMs: number;
+  /** Optional shell command run at each reset, e.g. a container restart. */
+  resetCommand: string;
 }
 
 export interface EnvironmentInfo {

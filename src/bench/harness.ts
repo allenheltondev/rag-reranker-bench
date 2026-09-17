@@ -1,6 +1,8 @@
+import { execSync } from 'node:child_process';
 import { cpus, totalmem } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { app, oracle } from '../config.js';
-import { describeOracle } from '../db/oracle.js';
+import { closePool, describeOracle } from '../db/oracle.js';
 import { AppReranker } from '../rerank/app.js';
 import { FixtureReranker } from '../rerank/fixture.js';
 import { InDbReranker } from '../rerank/indb.js';
@@ -137,14 +139,60 @@ export interface RunOptions {
 }
 
 /**
+ * Put the process and its connections back to a cold-ish state between isolation batches.
+ *
+ * The connection pool is closed (the next statement opens a fresh one), the application model
+ * is disposed (the next scoring call reloads it), the heap is collected if the runtime allows,
+ * an external command runs if one is configured - a container restart is the obvious use -
+ * and then the harness idles so that spinning ONNX Runtime threads, CPU boost state and the
+ * like have settled. Every unit warms up again after this, so none of it lands in a measurement.
+ */
+export async function resetBetweenBatches(
+  cfg: RunConfig,
+  deps: HarnessDeps,
+  log: (msg: string) => void,
+): Promise<void> {
+  log(`  reset: closing connections and disposing the model`);
+  if (cfg.backend === 'oracle') await closePool();
+  if (deps.appReranker) await deps.appReranker.close();
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (gc) gc();
+  if (cfg.resetCommand) {
+    log(`  reset: running ${JSON.stringify(cfg.resetCommand)}`);
+    execSync(cfg.resetCommand, { stdio: 'inherit' });
+  }
+  if (cfg.quiesceMs > 0) {
+    log(`  reset: quiescing for ${cfg.quiesceMs} ms`);
+    await sleep(cfg.quiesceMs);
+  }
+}
+
+/** Grouped stages become one unit; ungrouped stages are a unit of one. Declaration order is kept. */
+function unitsOf(stages: readonly Stage[]): Stage[][] {
+  const units: Stage[][] = [];
+  const groupIndex = new Map<string, number>();
+  for (const stage of stages) {
+    if (!stage.group) { units.push([stage]); continue; }
+    const at = groupIndex.get(stage.group);
+    if (at === undefined) { groupIndex.set(stage.group, units.length); units.push([stage]); }
+    else units[at]!.push(stage);
+  }
+  return units;
+}
+
+/**
  * Run every stage and collect timings.
  *
- * Ungrouped stages run one after another. Grouped stages - a treatment and its control, and
- * whatever else shares the group - are run interleaved: within each iteration, every query is
- * put through every pipeline in the group back to back, and the order rotates each iteration.
- * That is what makes the differences between them paired: each treatment timing has a control
- * timing taken seconds apart under the same load, cache state and clock speed, so drift over
- * the course of a run cancels instead of becoming a systematic error in one direction.
+ * The protocol, per repeat: batches run in order with a reset between them. Within a batch,
+ * a group (a treatment and its control) is run interleaved: within each iteration every
+ * query goes through every pipeline in the group back to back, order rotating per iteration.
+ * That is what makes the differences between them paired - each treatment timing has a
+ * control timing taken moments apart under the same load, cache state and clock speed, so
+ * drift over the course of a run cancels instead of becoming a systematic error.
+ *
+ * Batches are what keep the arms apart. Nothing is subtracted across a batch boundary, so
+ * whatever one arm leaves behind - spinning inference threads, a hot buffer cache - is reset
+ * before the other is measured.
  */
 export async function runBenchmark(
   stages: readonly Stage[],
@@ -158,38 +206,41 @@ export async function runBenchmark(
   const environment = await captureEnvironment(cfg);
   const iterationsByStage = new Map<string, IterationResult[]>(stages.map((s) => [s.id, []]));
 
-  // Preserve declaration order while batching grouped stages together.
-  const units: Stage[][] = [];
-  const groupIndex = new Map<string, number>();
-  for (const stage of stages) {
-    if (!stage.group) { units.push([stage]); continue; }
-    const at = groupIndex.get(stage.group);
-    if (at === undefined) { groupIndex.set(stage.group, units.length); units.push([stage]); }
-    else units[at]!.push(stage);
-  }
+  const batches: string[] = [];
+  for (const s of stages) if (!batches.includes(s.batch)) batches.push(s.batch);
 
-  let done = 0;
-  for (const unit of units) {
-    const pipelines = unit.map((stage) => ({ stage, pipeline: pipelineFor(stage, deps) }));
-    done += unit.length;
-    log(`[${done}/${stages.length}] ${unit.map((s) => s.label).join('  |  ')}`);
+  let first = true;
+  for (let repeat = 0; repeat < cfg.repeats; repeat++) {
+    if (cfg.repeats > 1) log(`--- repeat ${repeat + 1}/${cfg.repeats} ---`);
+    for (const batch of batches) {
+      if (!first) await resetBetweenBatches(cfg, deps, log);
+      first = false;
+      const batchStages = stages.filter((s) => s.batch === batch);
+      log(`batch "${batch}": ${batchStages.length} stages`);
 
-    // Warmup is per stage, not per run: the first execution of each distinct statement pays
-    // for a hard parse, and the first inference pays for model load and allocator warmup.
-    for (let w = 0; w < cfg.warmup; w++) {
-      for (const query of queries) {
-        for (const { pipeline } of pipelines) await pipeline.run(query);
-      }
-    }
+      for (const unit of unitsOf(batchStages)) {
+        const pipelines = unit.map((stage) => ({ stage, pipeline: pipelineFor(stage, deps) }));
+        log(`  ${unit.map((s) => s.label).join('  |  ')}`);
 
-    for (let i = 0; i < cfg.iterations; i++) {
-      const offset = i % pipelines.length;
-      const order = [...pipelines.slice(offset), ...pipelines.slice(0, offset)];
-      for (const query of queries) {
-        for (const { stage, pipeline } of order) {
-          const result = await pipeline.run(query);
-          result.iteration = i;
-          iterationsByStage.get(stage.id)!.push(result);
+        // Warmup is per unit, after any reset: the first execution of each statement pays for
+        // a hard parse, and the first inference pays for model load and allocator warmup.
+        for (let w = 0; w < cfg.warmup; w++) {
+          for (const query of queries) {
+            for (const { pipeline } of pipelines) await pipeline.run(query);
+          }
+        }
+
+        for (let i = 0; i < cfg.iterations; i++) {
+          const offset = i % pipelines.length;
+          const order = [...pipelines.slice(offset), ...pipelines.slice(0, offset)];
+          for (const query of queries) {
+            for (const { stage, pipeline } of order) {
+              const result = await pipeline.run(query);
+              result.iteration = i;
+              result.repeat = repeat;
+              iterationsByStage.get(stage.id)!.push(result);
+            }
+          }
         }
       }
     }
