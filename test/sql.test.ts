@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStages, runConfigFromEnv } from '../src/config.js';
 import { arms } from '../src/retrieval/candidates.js';
-import { loadSql, queryEmbedInput, render, splitStatements } from '../src/db/sql.js';
+import { loadSql, queryEmbedInput, render, splitStatements, usedBinds } from '../src/db/sql.js';
 import { assertIdentifier } from '../src/db/oracle.js';
 import { controlExpr, defaultScoreExpr, scoreExpr } from '../src/rerank/indb.js';
 import type { Stage } from '../src/types.js';
@@ -237,5 +237,57 @@ test('a configured prefix is concatenated and its quotes are escaped', () => {
   } finally {
     if (original === undefined) delete process.env['ORACLE_EMBED_QUERY_PREFIX'];
     else process.env['ORACLE_EMBED_QUERY_PREFIX'] = original;
+  }
+});
+
+test('binds are pruned to those the rendered statement actually uses', () => {
+  const all = { qtext: 'q', contains: '{q}', tenant: 't', owner: 'o', pool: 10, n: 10, rrfk: 60 };
+
+  // Vector-only has no lexical subquery, so :contains is absent and must not be bound.
+  const vector = loadSql('query_candidates.sql', arms('vector', 'BENCH'));
+  const vectorBinds = usedBinds(vector, all);
+  assert.ok(!('contains' in vectorBinds), ':contains bound for a statement without a text search');
+  assert.deepEqual(
+    Object.keys(vectorBinds).sort(),
+    ['n', 'owner', 'pool', 'qtext', 'rrfk', 'tenant'],
+  );
+
+  // Hybrid uses every one of them.
+  const hybrid = loadSql('query_candidates.sql', arms('hybrid-rrf', 'BENCH'));
+  assert.deepEqual(Object.keys(usedBinds(hybrid, all)).sort(), Object.keys(all).sort());
+
+  // Lexical-only still embeds the query for nothing but keeps every bind but none extra.
+  const lexical = loadSql('query_candidates.sql', arms('lexical', 'BENCH'));
+  assert.ok('contains' in usedBinds(lexical, all));
+});
+
+test('bind pruning ignores comments and string literals', () => {
+  // The templates list their binds in a header comment; that must not count as usage.
+  assert.deepEqual(usedBinds('-- Binds: :qtext :contains\nSELECT :qtext FROM DUAL', { qtext: 1, contains: 2 }), { qtext: 1 });
+  // An embedding prefix containing a colon is a literal, not a placeholder.
+  assert.deepEqual(usedBinds("SELECT 'query:passage' || :qtext FROM DUAL", { qtext: 1, passage: 2 }), { qtext: 1 });
+  // A doubled quote inside a literal must not end it early.
+  assert.deepEqual(usedBinds("SELECT 'it''s :nope' || :yes FROM DUAL", { yes: 1, nope: 2 }), { yes: 1 });
+});
+
+test('every stage binds exactly what its statement needs', () => {
+  // The failure this guards against is NJS-098, which only appears against a live database.
+  const all = { qtext: 'q', contains: '{q}', tenant: 't', owner: 'o', pool: 40, n: 40, rrfk: 60, topk: 10 };
+  for (const retrieval of RETRIEVALS) {
+    for (const control of [false, true]) {
+      const sql = loadSql('rerank_indb_prediction.sql', {
+        ...arms(retrieval, 'BENCH'),
+        SCORE_EXPR: control ? controlExpr() : scoreExpr(),
+      });
+      const binds = usedBinds(sql, all);
+      const body = executable(sql);
+      for (const name of Object.keys(all)) {
+        const present = new RegExp(`:${name}\\b`, 'i').test(body);
+        assert.equal(
+          name in binds, present,
+          `${retrieval}${control ? ' control' : ''}: :${name} present=${present} bound=${name in binds}`,
+        );
+      }
+    }
   }
 });

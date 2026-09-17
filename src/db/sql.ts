@@ -71,3 +71,34 @@ export function splitStatements(script: string): string[] {
     .filter((s) => s.length > 0)
     .filter((s) => s.split('\n').some((line) => line.trim() !== '' && !line.trim().startsWith('--')));
 }
+
+/**
+ * Keep only the binds the statement actually references.
+ *
+ * The retrieval strategies are the same template with arms swapped out, so a vector-only
+ * statement has no lexical subquery and never mentions :contains. node-oracledb's thin mode
+ * rejects a bind that the SQL does not use, so the bind set has to follow the rendered text
+ * rather than the caller's intent.
+ *
+ * Deriving it from the SQL rather than branching on the strategy means an arm can be edited
+ * without remembering to update a bind list somewhere else. Comments are stripped first
+ * because the templates document their own binds in a header ("Binds: :qtext :contains ..."),
+ * and string literals are stripped because an embedding instruction prefix may contain a colon.
+ */
+export function usedBinds<T extends Record<string, unknown>>(sql: string, binds: T): Partial<T> {
+  const executable = sql
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('--'))
+    .join('\n')
+    .replace(/'(?:[^']|'')*'/g, "''");
+
+  const used = new Set<string>();
+  for (const match of executable.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)) {
+    used.add(match[1]!.toLowerCase());
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(binds)) {
+    if (used.has(key.toLowerCase())) out[key] = value;
+  }
+  return out as Partial<T>;
+}

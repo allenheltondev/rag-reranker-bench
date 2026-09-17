@@ -1,7 +1,7 @@
 import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import { assertIdentifier, withConnection } from '../db/oracle.js';
-import { loadSql } from '../db/sql.js';
+import { loadSql, usedBinds } from '../db/sql.js';
 import { arms, bindsFor } from '../retrieval/candidates.js';
 import type { Query, RankedResult, Stage } from '../types.js';
 
@@ -70,7 +70,7 @@ export class InDbReranker {
     control = false,
   ): Promise<InDbOutcome> {
     const sql = this.sqlFor(retrieval, control);
-    const binds = bindsFor(query, n, this.rrfK, topK);
+    const binds = usedBinds(sql, bindsFor(query, n, this.rrfK, topK));
     return withConnection(async (conn) => {
       const started = performance.now();
       const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {

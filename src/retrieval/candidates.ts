@@ -1,7 +1,7 @@
 import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import { toContainsExpression, withConnection } from '../db/oracle.js';
-import { loadSql } from '../db/sql.js';
+import { loadSql, usedBinds } from '../db/sql.js';
 import type { Candidate, Query, Stage } from '../types.js';
 
 export interface CandidateBatch {
@@ -111,7 +111,7 @@ export class OracleCandidateSource implements CandidateSource {
 
   async generate(query: Query, retrieval: Stage['retrieval'], n: number): Promise<CandidateBatch> {
     const sql = this.sqlFor(retrieval);
-    const binds = bindsFor(query, n, this.rrfK);
+    const binds = usedBinds(sql, bindsFor(query, n, this.rrfK));
     return withConnection(async (conn) => {
       const started = performance.now();
       const res = await conn.execute<CandidateRow>(sql, binds, {
