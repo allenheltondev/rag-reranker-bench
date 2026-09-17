@@ -1,0 +1,208 @@
+[
+  {
+    "id": "q01",
+    "text": "What was the root cause of INC-4821?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "exact-identifier",
+    "judgments": {
+      "q01-c01": 3,
+      "q01-c05": 1
+    },
+    "note": "Nine incident reports share structure and vocabulary. Only the ID separates them, so vector similarity is nearly flat across all of them."
+  },
+  {
+    "id": "q02",
+    "text": "Which region did we move the ledger replicas to, us-east-2 or us-west-2?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "exact-identifier",
+    "judgments": {
+      "q02-c01": 3,
+      "q02-c02": 1,
+      "q02-c03": 1
+    },
+    "note": "Both region strings appear across the corpus with near-identical surrounding language. An embedding treats them as the same token neighbourhood."
+  },
+  {
+    "id": "q03",
+    "text": "How should I write code samples for the developer blog?",
+    "tenant": "acme",
+    "owner": "u-allen",
+    "kind": "conceptual",
+    "judgments": {
+      "q03-c01": 3,
+      "q03-c02": 2
+    },
+    "note": "The answering chunk never uses the words \"code sample\" or \"blog\". Pure vocabulary mismatch; lexical retrieval cannot find it."
+  },
+  {
+    "id": "q04",
+    "text": "Why does the agent keep forgetting things between sessions?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "conceptual",
+    "judgments": {
+      "q04-c01": 3,
+      "q04-c02": 2,
+      "q04-c03": 1
+    },
+    "note": "The answer is a design note about summarisation dropping durable facts. Shares almost no terms with the question."
+  },
+  {
+    "id": "q05",
+    "text": "What is our current deployment approval policy?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "scoped",
+    "judgments": {
+      "q05-c01": 3,
+      "q05-c04": 1
+    },
+    "note": "Three versions of this policy exist: the current one, an expired one, and another tenant's. Only metadata separates them; the text is nearly identical."
+  },
+  {
+    "id": "q06",
+    "text": "What database does the billing service use?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "scoped",
+    "judgments": {
+      "q06-c01": 3,
+      "q06-c03": 2
+    },
+    "note": "The stale answer is more strongly worded than the current one, so a reranker that ignores metadata will confidently promote the wrong chunk."
+  },
+  {
+    "id": "q07",
+    "text": "How do I roll back a canary that is failing health checks in us-east-2?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "mixed",
+    "judgments": {
+      "q07-c01": 3,
+      "q07-c02": 1,
+      "q07-c03": 1,
+      "q07-c04": 1
+    },
+    "note": "THE RERANKER CASE. Eight chunks discuss canaries in us-east-2 and score high on both vector and lexical retrieval, but only one describes the rollback procedure. Fusion ranks it mid-pack."
+  },
+  {
+    "id": "q08",
+    "text": "What should I do when the vector index build is stuck at 90 percent?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "mixed",
+    "judgments": {
+      "q08-c01": 3,
+      "q08-c02": 2,
+      "q08-c04": 1
+    },
+    "note": "Dense neighbourhood of index-related chunks. The procedural answer uses different phrasing than the question; the topically closest chunks are explanations rather than procedures."
+  },
+  {
+    "id": "q09",
+    "text": "Our retrieval returns the right documents but the model still answers wrong. What do we check?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "mixed",
+    "judgments": {
+      "q09-c01": 3,
+      "q09-c02": 2,
+      "q09-c03": 1,
+      "q09-c05": 2
+    },
+    "note": "The best answer is about ordering and context budget. Several chunks about retrieval quality score higher on similarity but answer a different question."
+  },
+  {
+    "id": "q10",
+    "text": "What does error code ORA-00060 mean in our ingest pipeline?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "exact-identifier",
+    "judgments": {
+      "q10-c01": 3,
+      "q10-c03": 1,
+      "q10-c04": 1
+    },
+    "note": "Error codes are the canonical lexical win: ORA-00060 and ORA-00054 are one character apart to an embedding."
+  },
+  {
+    "id": "q11",
+    "text": "What is Priya working on this quarter?",
+    "tenant": "acme",
+    "owner": "u-priya",
+    "kind": "scoped",
+    "judgments": {
+      "q11-c01": 3,
+      "q11-c03": 2
+    },
+    "note": "Owner-scoped memory. An identical-shaped note exists for another user; without an owner filter both are equally retrievable."
+  },
+  {
+    "id": "q12",
+    "text": "Is it worth adding another stage to our search pipeline?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "conceptual",
+    "judgments": {
+      "q12-c01": 3,
+      "q12-c02": 2,
+      "q12-c03": 1
+    },
+    "note": "Abstract question, concrete answer. The answering chunk is about measurement discipline and never says \"stage\" or \"pipeline\"."
+  },
+  {
+    "id": "q13",
+    "text": "Why did the nightly reconciliation job start taking four hours?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "mixed",
+    "judgments": {
+      "q13-c01": 3,
+      "q13-c02": 1,
+      "q13-c03": 2
+    },
+    "note": "The answer requires connecting a job slowdown to a replica migration described elsewhere in different words."
+  },
+  {
+    "id": "q14",
+    "text": "What are the rate limits on the public API?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "scoped",
+    "judgments": {
+      "q14-c01": 3,
+      "q14-c03": 1
+    },
+    "note": "The other tenant's limits are stated more specifically, which is exactly the kind of confident wrong answer a metadata filter has to prevent."
+  },
+  {
+    "id": "q15",
+    "text": "What did we decide about storing conversation history for enterprise customers?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "conceptual",
+    "judgments": {
+      "q15-c01": 3,
+      "q15-c02": 2,
+      "q15-c03": 2,
+      "q15-c04": 1
+    },
+    "note": "A decision record phrased as an outcome, surrounded by policy chunks that describe mechanisms rather than the decision."
+  },
+  {
+    "id": "q16",
+    "text": "The reranker made our results worse on some queries. Is that expected?",
+    "tenant": "acme",
+    "owner": null,
+    "kind": "mixed",
+    "judgments": {
+      "q16-c01": 3,
+      "q16-c02": 2,
+      "q16-c03": 1,
+      "q16-c04": 1
+    },
+    "note": "Self-referential and deliberately included: the honest answer is nuanced, and the neighbouring chunks are enthusiastic about reranking."
+  }
+]

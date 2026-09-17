@@ -1,0 +1,7 @@
+-- Remove everything the benchmark created. Tokens: ${PREFIX}
+BEGIN
+  EXECUTE IMMEDIATE 'DROP TABLE ${PREFIX}_CHUNKS PURGE';
+EXCEPTION
+  WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF;
+END;
+/

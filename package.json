@@ -1,0 +1,31 @@
+{
+  "name": "rag-reranker-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Where should the cross-encoder run? A benchmark comparing in-database reranking (Oracle AI Database 26ai) against application-side reranking using the same ONNX model and the same candidate sets.",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx test/*.test.ts",
+    "corpus": "tsx src/cli.ts corpus",
+    "load": "tsx src/cli.ts load",
+    "doctor": "tsx src/cli.ts doctor",
+    "bench": "tsx src/cli.ts bench",
+    "report": "tsx src/cli.ts report"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.3.3",
+    "dotenv": "^16.4.7",
+    "oracledb": "^6.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.6",
+    "@types/oracledb": "^7.0.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

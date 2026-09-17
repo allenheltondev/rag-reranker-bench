@@ -1,0 +1,13 @@
+-- Optional approximate vector index.
+--
+-- Run this only if you want to benchmark approximate search. The default benchmark uses exact
+-- search so that vector recall is not a moving part in the comparison: the question under test
+-- is where the cross-encoder runs, not how well an ANN index is tuned.
+--
+-- Tokens: ${PREFIX}
+
+CREATE VECTOR INDEX ${PREFIX}_CHUNKS_VEC_IX ON ${PREFIX}_CHUNKS (EMBEDDING)
+  ORGANIZATION INMEMORY NEIGHBOR GRAPH
+  DISTANCE COSINE
+  WITH TARGET ACCURACY 95
+/

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+*.log
+
+# Benchmark output: keep the directory, ignore runs (commit one deliberately if it backs an article claim)
+results/*
+!results/.gitkeep
+!results/example-fixture-run
+
+# Model artifacts are large; export them locally with scripts/export-reranker-onnx.sh
+models/
+*.onnx
+*.onnx_data

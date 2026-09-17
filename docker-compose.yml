@@ -1,0 +1,39 @@
+# A local database to run the benchmark against.
+#
+# IMPORTANT: the image tag decides which database version you get, and the in-database
+# reranking this benchmark measures needs a release that supports loading an ONNX reranking
+# model. Check the tag against Oracle's container registry listing before trusting a result,
+# and record the version you actually ran - `npm run bench` puts it in the report for you.
+#
+#   docker compose up -d
+#   docker compose logs -f oracle     # wait for "DATABASE IS READY TO USE!"
+#
+# Then create the directory object the model loader reads from:
+#   docker compose exec oracle sqlplus / as sysdba
+#   CREATE OR REPLACE DIRECTORY ONNX_DIR AS '/opt/oracle/onnx';
+#   GRANT READ ON DIRECTORY ONNX_DIR TO BENCH;
+
+services:
+  oracle:
+    image: container-registry.oracle.com/database/free:latest
+    container_name: rag-reranker-bench-db
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PWD: ${ORACLE_SYS_PASSWORD:-ChangeMe_1}
+      # Reranking a candidate pool is CPU-bound and memory-hungry; the defaults are too small.
+      INIT_SGA_SIZE: 2048
+      INIT_PGA_SIZE: 1024
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      # Put the exported ONNX models here so DBMS_VECTOR.LOAD_ONNX_MODEL can read them.
+      - ./models/oracle:/opt/oracle/onnx
+    healthcheck:
+      test: ["CMD", "sqlplus", "-L", "sys/${ORACLE_SYS_PASSWORD:-ChangeMe_1}@//localhost:1521/FREEPDB1", "as", "sysdba", "@/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+
+volumes:
+  oracle-data:

@@ -1,0 +1,16 @@
+stage_id,retrieval,reranker,candidate_count,top_k,p50_ms,p95_ms,p99_ms,mean_ms,bytes_per_query,ndcg,recall,mrr,scope_violations
+vector,vector,none,10,10,0.128,0.215,0.245,0.140,3159,0.5203,0.5729,0.5194,0
+vector+rerank-app@10,vector,app,10,10,1.778,2.056,2.279,1.813,3159,0.5775,0.5729,0.6271,0
+vector+rerank-app@20,vector,app,20,10,3.366,3.624,3.686,3.395,6290,0.6608,0.6875,0.6979,0
+vector+rerank-app@40,vector,app,40,10,6.566,7.001,7.034,6.216,12111,0.6688,0.7396,0.6964,0
+vector+rerank-app@80,vector,app,80,10,9.265,13.199,13.434,9.060,17953,0.6658,0.7396,0.6927,0
+lexical,lexical,none,10,10,0.322,0.517,0.763,0.356,2851,0.6568,0.7396,0.6375,0
+lexical+rerank-app@10,lexical,app,10,10,2.007,2.284,2.330,1.973,2851,0.6819,0.7396,0.7019,0
+lexical+rerank-app@20,lexical,app,20,10,3.518,3.773,3.905,2.986,5055,0.6659,0.7396,0.6927,0
+lexical+rerank-app@40,lexical,app,40,10,3.726,6.799,6.864,3.997,7217,0.6658,0.7396,0.6927,0
+lexical+rerank-app@80,lexical,app,80,10,3.670,8.026,8.495,4.175,7641,0.6658,0.7396,0.6927,0
+hybrid-rrf,hybrid-rrf,none,10,10,0.377,0.576,0.859,0.411,3130,0.6713,0.7187,0.6757,0
+hybrid-rrf+rerank-app@10,hybrid-rrf,app,10,10,2.030,2.286,2.454,2.070,3130,0.6795,0.7187,0.7104,0
+hybrid-rrf+rerank-app@20,hybrid-rrf,app,20,10,3.649,3.842,3.947,3.678,6275,0.6772,0.7396,0.7001,0
+hybrid-rrf+rerank-app@40,hybrid-rrf,app,40,10,6.858,7.243,7.290,6.515,12115,0.6658,0.7396,0.6927,0
+hybrid-rrf+rerank-app@80,hybrid-rrf,app,80,10,9.438,13.400,13.440,9.337,17992,0.6658,0.7396,0.6927,0
