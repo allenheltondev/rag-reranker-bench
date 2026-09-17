@@ -454,11 +454,31 @@ if (!handler) {
   process.exit(1);
 }
 
+/**
+ * Leave deliberately rather than waiting for the event loop to drain.
+ *
+ * Two things here outlive their owner: the Oracle connection pool holds `poolMin` connections
+ * open by design, and ONNX Runtime keeps native threads alive after the model is disposed.
+ * Neither is a leak that matters inside a command, but both keep Node from exiting, which
+ * looks to the person running it like the CLI has hung. Closing the pool centrally also means
+ * a command added later cannot forget to.
+ */
+async function finish(code: number): Promise<never> {
+  await closePool().catch(() => {});
+  // process.exit can truncate output that is still buffered, which matters when stdout is a
+  // pipe rather than a terminal, so flush before leaving.
+  await new Promise<void>((done) => {
+    if (process.stdout.writableLength === 0) done();
+    else process.stdout.write('', () => done());
+  });
+  process.exit(code);
+}
+
 try {
   await handler();
+  await finish(process.exitCode === undefined ? 0 : Number(process.exitCode));
 } catch (err) {
   log('');
   log(`Error: ${(err as Error).message}`);
-  await closePool().catch(() => {});
-  process.exit(1);
+  await finish(1);
 }
