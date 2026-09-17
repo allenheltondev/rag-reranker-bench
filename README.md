@@ -194,9 +194,9 @@ The two database copies go in `./models/oracle` (mounted into the container at
 easy to obtain:
 
 ```bash
-npm run models -- --only embed     # the embedding model
-npm run models -- --only rerank    # the augmented cross-encoder
-npm run models                     # both
+npm run models:embed     # the embedding model
+npm run models:rerank    # the augmented cross-encoder
+npm run models           # both
 ```
 
 The **embedding model** is a plain load of a prepared ONNX file. The **cross-encoder** must be

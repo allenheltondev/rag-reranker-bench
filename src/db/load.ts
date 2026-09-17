@@ -27,8 +27,20 @@ export async function runScript(
       try {
         await conn.execute(stmt);
       } catch (err) {
+        const message = (err as Error).message;
         const head = stmt.split('\n').filter((l) => !l.trim().startsWith('--')).slice(0, 3).join('\n');
-        throw new Error(`${name}: statement ${i + 1} failed.\n${head}\n\n${(err as Error).message}`);
+        // ORA-22288 on a model load means the database cannot see the file. It is always a
+        // path problem on the database host, never a problem with the ONNX file itself, and
+        // the raw error does not say which path it looked in.
+        const hint = message.includes('ORA-22288')
+          ? `\n\nThe database could not open that file. It looks inside the directory object on the
+DATABASE host, not on your machine. Check what it can actually see:
+  docker compose exec oracle ls -l /opt/oracle/onnx
+Files go in ./models/oracle on the host, which docker-compose mounts there. If that listing is
+empty, the file is not where you think it is; if the name differs, set ORACLE_EMBED_FILE or
+ORACLE_RERANK_FILE in .env to match.`
+          : '';
+        throw new Error(`${name}: statement ${i + 1} failed.\n${head}\n\n${message}${hint}`);
       }
     }
     await conn.commit();

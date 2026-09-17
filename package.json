@@ -15,6 +15,8 @@
     "bootstrap": "tsx src/cli.ts bootstrap",
     "load": "tsx src/cli.ts load",
     "models": "tsx src/cli.ts models",
+    "models:embed": "tsx src/cli.ts models --model embed",
+    "models:rerank": "tsx src/cli.ts models --model rerank",
     "doctor": "tsx src/cli.ts doctor",
     "bench": "tsx src/cli.ts bench",
     "report": "tsx src/cli.ts report"

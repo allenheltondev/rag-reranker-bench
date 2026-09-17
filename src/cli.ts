@@ -146,9 +146,11 @@ async function cmdBootstrap(): Promise<void> {
 /** Load the ONNX models into the database, from a directory object or from Object Storage. */
 async function cmdModels(): Promise<void> {
   const target = flag('adb') ? 'adb' : oracle.target;
-  const only = opt('only');
+  // `--only` is also an npm config flag, and npm can consume it before the script sees it.
+  // `--model` is the documented spelling; npm run models:embed / models:rerank use it.
+  const only = opt('model') ?? opt('only');
   if (only !== undefined && only !== 'embed' && only !== 'rerank') {
-    throw new Error(`--only takes 'embed' or 'rerank', got ${JSON.stringify(only)}.`);
+    throw new Error(`--model takes 'embed' or 'rerank', got ${JSON.stringify(only)}.`);
   }
   // Each model is one statement in the script, embedding first.
   const indices = only === 'embed' ? [0] : only === 'rerank' ? [1] : undefined;
@@ -328,7 +330,9 @@ function cmdHelp(): void {
   npm run corpus                      Generate the corpus and query set into data/
   npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
   npm run load                        Create the schema and load the corpus into Oracle
-  npm run models                      Load the ONNX models (--only embed|rerank, --adb for Object Storage)
+  npm run models                      Load both ONNX models into the database
+  npm run models:embed                Load only the embedding model
+  npm run models:rerank               Load only the cross-encoder
   npm run doctor                      Check Oracle, the models, and the app reranker
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run
