@@ -134,6 +134,12 @@ export async function verifyCandidateParity(
   return report;
 }
 
+/** Compact duration for progress lines: seconds under a minute, else m:ss. */
+function secs(ms: number): string {
+  const total = Math.round(ms / 1000);
+  return total < 60 ? `${total}s` : `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`;
+}
+
 export interface RunOptions {
   onProgress?: (msg: string) => void;
 }
@@ -224,12 +230,17 @@ export async function runBenchmark(
 
         // Warmup is per unit, after any reset: the first execution of each statement pays for
         // a hard parse, and the first inference pays for model load and allocator warmup.
+        const warmupStarted = performance.now();
         for (let w = 0; w < cfg.warmup; w++) {
           for (const query of queries) {
             for (const { pipeline } of pipelines) await pipeline.run(query);
           }
         }
+        if (cfg.warmup > 0) {
+          log(`    warmup: ${cfg.warmup} pass(es) in ${secs(performance.now() - warmupStarted)}`);
+        }
 
+        const measureStarted = performance.now();
         for (let i = 0; i < cfg.iterations; i++) {
           const offset = i % pipelines.length;
           const order = [...pipelines.slice(offset), ...pipelines.slice(0, offset)];
@@ -241,6 +252,14 @@ export async function runBenchmark(
               iterationsByStage.get(stage.id)!.push(result);
             }
           }
+          // A cross-encoder over a deep candidate pool takes minutes per unit. Without a line
+          // per iteration there is no way to tell a slow run from a hung one.
+          const elapsed = performance.now() - measureStarted;
+          const remaining = (elapsed / (i + 1)) * (cfg.iterations - i - 1);
+          log(
+            `    iteration ${i + 1}/${cfg.iterations} · ${secs(elapsed)} elapsed`
+            + (i + 1 < cfg.iterations ? ` · ~${secs(remaining)} left` : ''),
+          );
         }
       }
     }
