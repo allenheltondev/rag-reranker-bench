@@ -190,8 +190,14 @@ scripts/export-reranker-onnx.sh          # application copy -> ./models/bge-rera
 ```
 
 The two database copies go in `./models/oracle` (mounted into the container at
-`/opt/oracle/onnx`). They load independently, which matters because they are not equally
-easy to obtain:
+`/opt/oracle/onnx`). Oracle publishes the embedding model as a zip; this downloads it,
+unpacks the `.onnx` out of it and puts it where the database can read it:
+
+```bash
+npm run fetch:model -- <url>        # add --as name.onnx to control the filename
+```
+
+The two models load independently, which matters because they are not equally easy to obtain:
 
 ```bash
 npm run models:embed     # the embedding model

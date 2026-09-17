@@ -80,6 +80,8 @@ export const app = {
 } as const;
 
 export const paths = {
+  /** Where the database-side ONNX files live. docker-compose mounts this into the container. */
+  oracleModels: resolve(process.env.ORACLE_MODELS_DIR ?? './models/oracle'),
   corpus: resolve(process.env.CORPUS_PATH ?? './data/corpus.json'),
   queries: resolve(process.env.QUERIES_PATH ?? './data/queries.json'),
   results: resolve(process.env.RESULTS_DIR ?? './results'),

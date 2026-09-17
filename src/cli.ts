@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
 import { assertIdentifier, closePool, describeOracle, withConnection } from './db/oracle.js';
@@ -8,6 +8,7 @@ import { AppReranker } from './rerank/app.js';
 import { scoreExpr } from './rerank/indb.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
+import { readZip } from './tools/unzip.js';
 import type { BenchRun, Chunk, Query, RunConfig } from './types.js';
 
 const args = process.argv.slice(2);
@@ -94,6 +95,70 @@ async function cmdLoad(): Promise<void> {
     log('Skipped the approximate vector index (exact search keeps recall out of the comparison).');
     log('Pass --vector-index to create it anyway.');
   }
+}
+
+/**
+ * Download a database-side ONNX model and put it where the database can read it.
+ *
+ * Exists because the useful form of these models is published as a zip, and unpacking one
+ * into the right place is three fiddly steps that differ per platform. Takes a URL because
+ * the download locations move between releases; the README says where to find the current one.
+ */
+async function cmdFetchModel(): Promise<void> {
+  const size = (bytes: number): string =>
+    bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const url = opt('url') ?? args[1];
+  if (!url || !/^https?:\/\//.test(url)) {
+    throw new Error('Usage: npm run fetch:model -- <url> [--as filename.onnx]');
+  }
+  mkdirSync(paths.oracleModels, { recursive: true });
+
+  log(`Downloading ${url}`);
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  log(`  ${size(buf.length)} received`);
+
+  // A login page or an error page is the most common thing to get instead of a model, and it
+  // would otherwise be written out and fail much later with an unhelpful Oracle error.
+  const head = buf.subarray(0, 512).toString('utf8').trimStart().toLowerCase();
+  if (head.startsWith('<!doctype html') || head.startsWith('<html')) {
+    throw new Error(
+      'That URL returned an HTML page, not a file. It is probably a login or landing page; '
+      + 'use the direct download link.',
+    );
+  }
+
+  const written: string[] = [];
+  const isZip = buf.length > 4 && buf.readUInt32LE(0) === 0x04034b50;
+  if (isZip) {
+    const { entries, names } = readZip(buf, (n) => n.toLowerCase().endsWith('.onnx'));
+    if (entries.length === 0) {
+      throw new Error(`No .onnx file inside the archive. It contains: ${names.join(', ')}`);
+    }
+    for (const entry of entries) {
+      // Flatten: the database reads a directory, not a tree, and archive paths vary.
+      const name = opt('as') ?? basename(entry.name);
+      const dest = resolve(paths.oracleModels, name);
+      writeFileSync(dest, entry.data);
+      written.push(`${dest} (${size(entry.data.length)})`);
+    }
+  } else {
+    const name = opt('as') ?? (basename(new URL(url).pathname) || 'model.onnx');
+    const dest = resolve(paths.oracleModels, name);
+    writeFileSync(dest, buf);
+    written.push(`${dest} (${size(buf.length)})`);
+  }
+
+  log('');
+  for (const w of written) log(`Wrote ${w}`);
+  log('');
+  log('The database reads these from inside its own container. Confirm it can see them:');
+  log('  docker compose exec oracle ls -l /opt/oracle/onnx');
+  log('');
+  log(`Then: npm run models:embed   (expects ${oracle.embedFile})`);
+  log(`  or: npm run models:rerank  (expects ${oracle.rerankFile})`);
+  log('If the file landed under a different name, set ORACLE_EMBED_FILE / ORACLE_RERANK_FILE in .env.');
 }
 
 /**
@@ -329,6 +394,7 @@ function cmdHelp(): void {
 
   npm run corpus                      Generate the corpus and query set into data/
   npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
+  npm run fetch:model -- <url>        Download a database-side ONNX model (unzips if needed)
   npm run load                        Create the schema and load the corpus into Oracle
   npm run models                      Load both ONNX models into the database
   npm run models:embed                Load only the embedding model
@@ -360,6 +426,7 @@ Flags for doctor:
 const commands: Record<string, () => Promise<void> | void> = {
   corpus: cmdCorpus,
   bootstrap: cmdBootstrap,
+  'fetch-model': cmdFetchModel,
   load: cmdLoad,
   models: cmdModels,
   doctor: cmdDoctor,
