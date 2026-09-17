@@ -187,10 +187,35 @@ application, and an augmented export with the tokenizer in the graph for the dat
 
 ```bash
 scripts/export-reranker-onnx.sh          # application copy -> ./models/bge-reranker-base
-# put the augmented reranker and the embedding model in ./models/oracle (mounted into the
-# container at /opt/oracle/onnx), then:
-npm run models
 ```
+
+The two database copies go in `./models/oracle` (mounted into the container at
+`/opt/oracle/onnx`). They load independently, which matters because they are not equally
+easy to obtain:
+
+```bash
+npm run models -- --only embed     # the embedding model
+npm run models -- --only rerank    # the augmented cross-encoder
+npm run models                     # both
+```
+
+The **embedding model** is a plain load of a prepared ONNX file. The **cross-encoder** must be
+the augmented export with the tokenizer inside the graph, because `PREDICTION()` hands it raw
+text — the `optimum` export above is not that, and Oracle's OML4Py utility is what produces it.
+
+You do not have to wait for the cross-encoder to get real numbers out of Oracle. With only the
+embedding model loaded, retrieval, fusion, metadata filtering and application-side reranking
+all run against the database:
+
+```bash
+npm run load
+npm run doctor                                  # reports the reranker as skipped, not failed
+npm run bench -- --rerankers none,app
+```
+
+That gives you genuine Oracle retrieval quality and the application arm's cost. Adding the
+cross-encoder later unlocks the in-database arm and the transfer comparison, with no other
+changes.
 
 ### 4. Load and check
 

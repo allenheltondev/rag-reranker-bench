@@ -146,24 +146,33 @@ async function cmdBootstrap(): Promise<void> {
 /** Load the ONNX models into the database, from a directory object or from Object Storage. */
 async function cmdModels(): Promise<void> {
   const target = flag('adb') ? 'adb' : oracle.target;
+  const only = opt('only');
+  if (only !== undefined && only !== 'embed' && only !== 'rerank') {
+    throw new Error(`--only takes 'embed' or 'rerank', got ${JSON.stringify(only)}.`);
+  }
+  // Each model is one statement in the script, embedding first.
+  const indices = only === 'embed' ? [0] : only === 'rerank' ? [1] : undefined;
+  const what = only === 'embed' ? oracle.embedFile : only === 'rerank' ? oracle.rerankFile
+    : `${oracle.embedFile} and ${oracle.rerankFile}`;
+
   if (target === 'adb') {
     if (!oracle.modelsParUrl) {
       throw new Error('ORACLE_MODELS_PAR_URL is required for the adb target (terraform output models_par_base_url).');
     }
     const base = oracle.modelsParUrl.endsWith('/') ? oracle.modelsParUrl : `${oracle.modelsParUrl}/`;
-    log(`Loading ${oracle.embedFile} and ${oracle.rerankFile} from Object Storage as ${oracle.embedModel} / ${oracle.rerankModel}...`);
+    log(`Loading ${what} from Object Storage...`);
     await runScript('03_load_models_adb.sql', {
       PAR_BASE_URL: base.replace(/'/g, "''"),
       EMBED_FILE: oracle.embedFile,
       RERANK_FILE: oracle.rerankFile,
-    });
+    }, 'bench', indices);
   } else {
-    log(`Loading ${oracle.embedFile} and ${oracle.rerankFile} from directory ${oracle.onnxDirectory} as ${oracle.embedModel} / ${oracle.rerankModel}...`);
+    log(`Loading ${what} from directory ${oracle.onnxDirectory}...`);
     await runScript('03_load_models.sql', {
       ONNX_DIRECTORY: assertIdentifier(oracle.onnxDirectory, 'ORACLE_ONNX_DIRECTORY'),
       EMBED_FILE: oracle.embedFile,
       RERANK_FILE: oracle.rerankFile,
-    });
+    }, 'bench', indices);
   }
   const info = await describeOracle();
   log(`Models now in schema: ${info.models.join(', ') || '(none)'}`);
@@ -195,12 +204,12 @@ async function cmdDoctor(): Promise<void> {
       return `${info.version} (${info.clientMode} client)`;
     });
     await check('chunk table', async () => `${await countChunks()} rows`);
-    await check('models loaded', async () => {
+    await check('embedding model loaded', async () => {
       const info = await describeOracle();
-      const want = [oracle.embedModel.toUpperCase(), oracle.rerankModel.toUpperCase()];
-      const missing = want.filter((m) => !info.models.includes(m));
-      if (missing.length) throw new Error(`missing ${missing.join(', ')} — run sql/03_load_models.sql`);
-      return info.models.join(', ');
+      if (!info.models.includes(oracle.embedModel.toUpperCase())) {
+        throw new Error(`${oracle.embedModel} missing — run \`npm run models -- --only embed\``);
+      }
+      return oracle.embedModel;
     });
     await check('embedding works', async () => withConnection(async (conn) => {
       const r = await conn.execute<[unknown]>(
@@ -208,16 +217,25 @@ async function cmdDoctor(): Promise<void> {
       );
       return r.rows?.[0] ? `returned a vector (expecting ${oracle.embedDims} dims)` : 'no row';
     }));
-    // The most likely thing to be wrong, and the most expensive to discover mid-run.
-    await check(`in-DB scoring via ${oracle.indbRerankApi}`, async () => withConnection(async (conn) => {
-      const r = await conn.execute<[number]>(
-        `SELECT ${scoreExpr().replace(/TITLE \|\| '\. ' \|\| CONTENT/, `'the sky is blue'`)} FROM DUAL`,
-        { qtext: 'what colour is the sky' },
-      );
-      const score = r.rows?.[0]?.[0];
-      if (typeof score !== 'number') throw new Error(`expected a number, got ${typeof score}`);
-      return `scored ${score.toFixed(4)}`;
-    }));
+
+    // The cross-encoder is the hard half of the setup. Report its absence as a skip rather
+    // than a failure, so that a run of the retrieval and application-side stages is not
+    // gated on it: `npm run bench -- --rerankers none,app` works without it.
+    const info = await describeOracle();
+    if (!info.models.includes(oracle.rerankModel.toUpperCase())) {
+      log(`  skip ${oracle.rerankModel} not loaded — in-database reranking unavailable.`);
+      log(`       Everything else works: npm run bench -- --rerankers none,app`);
+    } else {
+      await check(`in-DB scoring via ${oracle.indbRerankApi}`, async () => withConnection(async (conn) => {
+        const r = await conn.execute<[number]>(
+          `SELECT ${scoreExpr().replace(/TITLE \|\| '\. ' \|\| CONTENT/, `'the sky is blue'`)} FROM DUAL`,
+          { qtext: 'what colour is the sky' },
+        );
+        const score = r.rows?.[0]?.[0];
+        if (typeof score !== 'number') throw new Error(`expected a number, got ${typeof score}`);
+        return `scored ${score.toFixed(4)}`;
+      }));
+    }
   }
 
   if (!flag('skip-app')) {
@@ -310,7 +328,7 @@ function cmdHelp(): void {
   npm run corpus                      Generate the corpus and query set into data/
   npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
   npm run load                        Create the schema and load the corpus into Oracle
-  npm run models                      Load the ONNX models into the database (--adb for Object Storage)
+  npm run models                      Load the ONNX models (--only embed|rerank, --adb for Object Storage)
   npm run doctor                      Check Oracle, the models, and the app reranker
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run

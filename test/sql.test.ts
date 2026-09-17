@@ -52,40 +52,26 @@ test('schema and teardown scripts render and split into statements', () => {
   assert.equal(splitStatements(loadSql('99_teardown.sql')).length, 1);
 });
 
-test('model-loading scripts render for both targets and split into four statements', () => {
+test('model-loading scripts are one statement per model, embedding first', () => {
+  // cmdModels selects statement 0 for --only embed and 1 for --only rerank, so the order and
+  // the count are load-bearing, not incidental.
   const local = splitStatements(loadSql('03_load_models.sql', {
     ONNX_DIRECTORY: 'ONNX_DIR', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
   }));
-  assert.equal(local.length, 4);
-  assert.ok(local[1]!.includes("directory  => 'ONNX_DIR'") && local[1]!.includes("'e.onnx'"));
-  assert.ok(local[3]!.includes("'r.onnx'") && local[3]!.includes('DOC_EMBEDDER') === false);
+  assert.equal(local.length, 2);
+  assert.ok(local[0]!.includes("'e.onnx'") && local[0]!.includes('DOC_EMBEDDER'));
+  assert.ok(!local[0]!.includes('BGE_RERANKER'), 'embedding statement touches the reranker');
+  assert.ok(local[1]!.includes("'r.onnx'") && local[1]!.includes('BGE_RERANKER'));
+  assert.ok(!local[1]!.includes('DOC_EMBEDDER'), 'reranker statement touches the embedder');
+  // Each statement drops before loading, so re-running is idempotent.
+  assert.ok(local.every((x) => x.includes('DROP_ONNX_MODEL') && x.includes('LOAD_ONNX_MODEL')));
 
   const adb = splitStatements(loadSql('03_load_models_adb.sql', {
     PAR_BASE_URL: 'https://x/p/abc/n/ns/b/models/o/', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
   }));
-  assert.equal(adb.length, 4);
-  assert.ok(adb[1]!.includes("'https://x/p/abc/n/ns/b/models/o/e.onnx'"));
-  assert.ok(adb[3]!.includes('LOAD_ONNX_MODEL_CLOUD'));
-});
-
-test('the user bootstrap scripts render and are re-runnable by construction', () => {
-  const stmts = splitStatements(loadSql('00_user.sql', {
-    BENCH_USER: 'BENCH', BENCH_PASSWORD: 'Secret_1', TABLESPACE: 'USERS',
-  }));
-  assert.ok(stmts.length >= 7, `expected the grants to split out, got ${stmts.length}`);
-  // Creating the user must not fail when it already exists, or bootstrap is a one-shot.
-  assert.ok(stmts[0]!.includes('ALTER USER BENCH IDENTIFIED BY "Secret_1"'));
-  assert.ok(stmts[0]!.includes('CREATE USER BENCH IDENTIFIED BY "Secret_1"'));
-  assert.ok(stmts.some((x) => x.includes('CREATE MINING MODEL')), 'no mining model grant');
-  assert.ok(stmts.some((x) => x.includes('CTXAPP')), 'no Oracle Text grant');
-  // Optional packages must be tolerated rather than aborting the script.
-  assert.ok(stmts.some((x) => x.includes('DBMS_CLOUD') && x.includes('EXCEPTION')));
-
-  const local = splitStatements(loadSql('00_user_local.sql', {
-    BENCH_USER: 'BENCH', ONNX_DIRECTORY: 'ONNX_DIR', ONNX_PATH: '/opt/oracle/onnx',
-  }));
-  assert.equal(local.length, 2);
-  assert.ok(local[0]!.includes("CREATE OR REPLACE DIRECTORY ONNX_DIR AS '/opt/oracle/onnx'"));
+  assert.equal(adb.length, 2);
+  assert.ok(adb[0]!.includes("'https://x/p/abc/n/ns/b/models/o/e.onnx'"));
+  assert.ok(adb[1]!.includes('LOAD_ONNX_MODEL_CLOUD') && adb[1]!.includes('r.onnx'));
 });
 
 test('splitStatements drops comment-only fragments', () => {

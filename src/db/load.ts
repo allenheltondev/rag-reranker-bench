@@ -13,8 +13,14 @@ export async function runScript(
   name: string,
   extra: Record<string, string> = {},
   as: 'bench' | 'elevated' = 'bench',
+  only?: readonly number[],
 ): Promise<void> {
-  const statements = splitStatements(loadSql(name, extra));
+  const all = splitStatements(loadSql(name, extra));
+  const statements = only ? only.map((i) => {
+    const stmt = all[i];
+    if (stmt === undefined) throw new Error(`${name} has no statement ${i} (found ${all.length}).`);
+    return stmt;
+  }) : all;
   const runner = as === 'elevated' ? withElevatedConnection : withConnection;
   await runner(async (conn) => {
     for (const [i, stmt] of statements.entries()) {
