@@ -11,13 +11,19 @@ export interface StageSummary {
   p95: number;
   p99: number;
   meanMs: number;
-  /** stddev / mean of the total, as a stability figure for the stage. */
+  /**
+   * Run-to-run noise: for each query, the coefficient of variation of its total across
+   * iterations; then the median of those across queries. Computed within a query on purpose,
+   * so that legitimately different costs between queries do not read as instability.
+   */
   cv: number;
+  /** The worst single query's within-query CV, and which query it was. */
+  worstQueryCv: { queryId: string; cv: number };
   /** Mean bytes of candidate text crossing the database boundary per query. */
   bytesPerQuery: number;
   quality: QualitySummary;
   attribution: 'split' | 'total-only';
-  /** Mean sub-phase timings, only meaningful when attribution is 'split'. */
+  /** Median sub-phase timings, only meaningful when attribution is 'split'. */
   phases?: { candidates: number; tokenize: number; infer: number; sort: number };
   /** Out-of-scope rows that reached the context window. Any non-zero value is a bug. */
   violations: { tenant: number; owner: number; expired: number };
@@ -50,6 +56,20 @@ export function summariseStage(
 ): StageSummary {
   const totals = run.iterations.map((i) => i.timings.total);
   const perQueryResults = resultsByQuery(run);
+
+  const totalsByQuery = new Map<string, number[]>();
+  for (const i of run.iterations) {
+    const arr = totalsByQuery.get(i.queryId) ?? [];
+    arr.push(i.timings.total);
+    totalsByQuery.set(i.queryId, arr);
+  }
+  const perQueryCv = [...totalsByQuery.entries()]
+    .map(([queryId, xs]) => ({ queryId, cv: cv(xs) }))
+    .filter((x) => !Number.isNaN(x.cv));
+  const worstQueryCv = perQueryCv.reduce(
+    (a, b) => (b.cv > a.cv ? b : a),
+    perQueryCv[0] ?? { queryId: 'n/a', cv: NaN },
+  );
   const violations = { tenant: 0, owner: 0, expired: 0 };
   if (chunkById) {
     for (const q of queries) {
@@ -67,7 +87,8 @@ export function summariseStage(
     p95: percentile(totals, 95),
     p99: percentile(totals, 99),
     meanMs: mean(totals),
-    cv: cv(totals),
+    cv: median(perQueryCv.map((x) => x.cv)),
+    worstQueryCv,
     bytesPerQuery: mean(run.iterations.map((i) => i.bytesFromDb)),
     quality: summariseQuality(perQueryResults, queries, topK),
     attribution: run.iterations[0]?.attribution ?? 'split',
@@ -75,10 +96,10 @@ export function summariseStage(
   };
   if (summary.attribution === 'split') {
     summary.phases = {
-      candidates: mean(run.iterations.map((i) => i.timings.candidates)),
-      tokenize: mean(run.iterations.map((i) => i.timings.tokenize)),
-      infer: mean(run.iterations.map((i) => i.timings.infer)),
-      sort: mean(run.iterations.map((i) => i.timings.sort)),
+      candidates: median(run.iterations.map((i) => i.timings.candidates)),
+      tokenize: median(run.iterations.map((i) => i.timings.tokenize)),
+      infer: median(run.iterations.map((i) => i.timings.infer)),
+      sort: median(run.iterations.map((i) => i.timings.sort)),
     };
   }
   return summary;
@@ -419,7 +440,7 @@ export function renderMarkdown(
     out.push('The in-database path is a single statement and cannot be broken down from outside the');
     out.push('database, so it is absent from this table by construction rather than by omission.');
     out.push('');
-    out.push('| Stage | Candidates (ms) | Tokenize (ms) | Infer (ms) | Sort (ms) | Total p50 (ms) |');
+    out.push('| Stage | Candidates p50 (ms) | Tokenize p50 (ms) | Infer p50 (ms) | Sort p50 (ms) | Total p50 (ms) |');
     out.push('|---|---:|---:|---:|---:|---:|');
     for (const s of splits) {
       const p = s.phases!;
@@ -486,17 +507,23 @@ export function renderMarkdown(
 
   out.push('## Stability');
   out.push('');
-  const unstable = summaries.filter((s) => s.cv > 0.25);
-  const worst = summaries.reduce((a, b) => (b.cv > a.cv ? b : a), summaries[0]!);
-  out.push(`Coefficient of variation (stddev / mean) of the end-to-end time per stage. Highest: ${fmt(worst.cv * 100)}% on ${worst.stage.id}.`);
-  if (unstable.length === 0) {
-    out.push('Every stage is under 25%, so the intervals above are narrow enough to compare.');
-  } else {
-    out.push('');
-    out.push('These stages exceed 25% and their intervals should be read with that in mind — more iterations, or a quieter machine, will tighten them:');
-    out.push('');
-    for (const s of unstable) out.push(`- \`${s.stage.id}\`: ${fmt(s.cv * 100)}%`);
+  out.push('Run-to-run noise, measured within each query: the coefficient of variation of a query\'s');
+  out.push('end-to-end time across iterations, summarised across queries. It is computed this way so');
+  out.push('that queries which legitimately cost different amounts do not read as instability. Stages');
+  out.push('under a millisecond will show large percentages from timer resolution alone; read those in');
+  out.push('absolute terms.');
+  out.push('');
+  out.push('| Stage | p50 (ms) | Median within-query CV | Worst query | Its CV |');
+  out.push('|---|---:|---:|---|---:|');
+  for (const s of summaries) {
+    const flag = s.cv > 0.25 && s.p50 >= 1 ? ' ⚠' : '';
+    out.push(`| ${s.stage.id} | ${fmt(s.p50)} | ${fmt(s.cv * 100)}%${flag} | ${s.worstQueryCv.queryId} | ${fmt(s.worstQueryCv.cv * 100)}% |`);
   }
+  out.push('');
+  const unstable = summaries.filter((s) => s.cv > 0.25 && s.p50 >= 1);
+  out.push(unstable.length === 0
+    ? 'No stage over a millisecond exceeds 25% within-query variation; the intervals above are as tight as the iteration count allows.'
+    : `⚠ ${unstable.length} stage(s) over a millisecond exceed 25% within-query variation. More iterations, more repeats, or a quieter machine will tighten their intervals.`);
   out.push('');
 
   return out.join('\n');
