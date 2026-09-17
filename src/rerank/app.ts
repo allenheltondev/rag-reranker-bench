@@ -55,7 +55,7 @@ export class AppReranker {
     } catch (err) {
       throw new Error(
         `Could not load the application-side reranker from ${app.modelPath}.\n` +
-        `Run scripts/export-reranker-onnx.sh first, and make sure APP_RERANK_MODEL_PATH points ` +
+        `Run \`npm run export:app-model\` first, and make sure APP_RERANK_MODEL_PATH points ` +
         `at a directory containing config.json, tokenizer.json and onnx/model.onnx.\n\n` +
         `${(err as Error).message}`,
       );

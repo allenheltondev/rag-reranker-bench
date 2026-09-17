@@ -12,3 +12,6 @@ results/*
 models/
 *.onnx
 *.onnx_data
+
+# Created by `npm run export:app-model`
+.venv-export/

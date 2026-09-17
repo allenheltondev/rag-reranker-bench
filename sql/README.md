@@ -105,7 +105,7 @@ retrieval scaling — just don't change two things at once.
 The application and the database both run `BAAI/bge-reranker-base`, but they need it packaged
 differently:
 
-- **Application:** a plain ONNX export plus `tokenizer.json`. `scripts/export-reranker-onnx.sh`
+- **Application:** a plain ONNX export plus `tokenizer.json`. `npm run export:app-model`
   produces this with `optimum-cli`, and ONNX Runtime is fed pre-tokenized input.
 - **Database:** an *augmented* export with the tokenizer embedded in the graph, because
   `PREDICTION()` is handed raw text and has to tokenize it itself. Oracle's OML4Py client

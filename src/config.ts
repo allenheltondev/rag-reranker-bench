@@ -74,8 +74,8 @@ export const oracle = {
 export const app = {
   /**
    * Local directory holding the exported cross-encoder (config.json, tokenizer.json,
-   * onnx/model.onnx). Produced by scripts/export-reranker-onnx.sh so that the app side
-   * runs the *same weights* the database does.
+   * onnx/model.onnx). Produced by `npm run export:app-model` so that the app side runs the
+   * *same weights* the database does.
    */
   modelPath: resolve(process.env.APP_RERANK_MODEL_PATH ?? './models/bge-reranker-base'),
   /** 'fp32' keeps parity with the in-database model. Quantized variants change the comparison. */

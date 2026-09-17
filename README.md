@@ -186,8 +186,11 @@ application, and an augmented export with the tokenizer in the graph for the dat
 [`sql/README.md`](sql/README.md).
 
 ```bash
-scripts/export-reranker-onnx.sh          # application copy -> ./models/bge-reranker-base
+npm run export:app-model                 # application copy -> ./models/bge-reranker-base
 ```
+
+That needs Python 3 on your PATH and reachable Hugging Face; it builds an isolated virtualenv,
+runs the `optimum` export and leaves the files where the application reranker expects them.
 
 The two database copies go in `./models/oracle` (mounted into the container at
 `/opt/oracle/onnx`). Oracle publishes the embedding model as a zip; this downloads it,
@@ -227,6 +230,11 @@ npm run load
 npm run doctor                                  # reports the reranker as skipped, not failed
 npm run bench -- --rerankers none,app
 ```
+
+`npm run load` takes `--vector-index` to build an approximate index instead of using exact
+search. It is off by default on purpose, and on the Free container it needs `vector_memory_size`
+set before it will work at all — if you have not done that, it fails with ORA-51962 and nothing
+else is affected.
 
 That gives you genuine Oracle retrieval quality and the application arm's cost. Adding the
 cross-encoder later unlocks the in-database arm and the transfer comparison, with no other

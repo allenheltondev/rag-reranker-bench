@@ -61,7 +61,7 @@ Then the normal sequence, with the application model exported on the VM so both 
 same checkpoint:
 
 ```bash
-scripts/export-reranker-onnx.sh
+npm run export:app-model
 npm run bootstrap && npm run corpus && npm run models && npm run load && npm run doctor
 npm run bench -- --repeats 3
 ```

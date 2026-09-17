@@ -8,6 +8,7 @@ import { AppReranker } from './rerank/app.js';
 import { scoreExpr } from './rerank/indb.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
+import { exportAppModel } from './tools/export-app-model.js';
 import { readZip } from './tools/unzip.js';
 import type { BenchRun, Chunk, Query, RunConfig } from './types.js';
 
@@ -95,6 +96,15 @@ async function cmdLoad(): Promise<void> {
     log('Skipped the approximate vector index (exact search keeps recall out of the comparison).');
     log('Pass --vector-index to create it anyway.');
   }
+}
+
+/** Export the application-side cross-encoder. Cross-platform; see src/tools/export-app-model.ts. */
+async function cmdExportAppModel(): Promise<void> {
+  exportAppModel({
+    model: opt('hf-model') ?? 'BAAI/bge-reranker-base',
+    outDir: opt('out') ?? app.modelPath,
+    log,
+  });
 }
 
 /**
@@ -395,6 +405,7 @@ function cmdHelp(): void {
   npm run corpus                      Generate the corpus and query set into data/
   npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
   npm run fetch:model -- <url>        Download a database-side ONNX model (unzips if needed)
+  npm run export:app-model            Export the application-side cross-encoder to ONNX
   npm run load                        Create the schema and load the corpus into Oracle
   npm run models                      Load both ONNX models into the database
   npm run models:embed                Load only the embedding model
@@ -427,6 +438,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   corpus: cmdCorpus,
   bootstrap: cmdBootstrap,
   'fetch-model': cmdFetchModel,
+  'export-app-model': cmdExportAppModel,
   load: cmdLoad,
   models: cmdModels,
   doctor: cmdDoctor,
