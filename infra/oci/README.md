@@ -37,10 +37,7 @@ Then, from the repo root:
 # 1. Upload the models. terraform output prints the exact command.
 terraform -chdir=infra/oci output -raw upload_models | bash
 
-# 2. Create the benchmark user, once, as ADMIN. Edit the DEFINEs at the top first.
-sql admin@"$(terraform -chdir=infra/oci output -json adb_connection_strings | jq -r .TP)" @sql/00_user.sql
-
-# 3. On the VM (cloud-init has cloned the repo and installed Node):
+# 2. On the VM (cloud-init has cloned the repo and installed Node):
 ssh opc@$(terraform -chdir=infra/oci output -raw app_public_ip)
 cd rag-reranker-bench && npm install && cp .env.example .env
 ```
@@ -53,6 +50,11 @@ ORACLE_PASSWORD=<what you set in 00_user.sql>
 ORACLE_CONNECT_STRING=<the TP entry from `terraform output adb_connection_strings`>
 ORACLE_TARGET=adb
 ORACLE_MODELS_PAR_URL=<`terraform output -raw models_par_base_url`>
+
+# Elevated credentials for `npm run bootstrap`. Autonomous has no customer SYSDBA, so this
+# is ADMIN and the connection is made without a privilege flag.
+ORACLE_SYS_USER=ADMIN
+ORACLE_SYS_PASSWORD=<TF_VAR_db_admin_password>
 ```
 
 Then the normal sequence, with the application model exported on the VM so both arms run the
@@ -60,7 +62,7 @@ same checkpoint:
 
 ```bash
 scripts/export-reranker-onnx.sh
-npm run corpus && npm run models && npm run load && npm run doctor
+npm run bootstrap && npm run corpus && npm run models && npm run load && npm run doctor
 npm run bench -- --repeats 3
 ```
 

@@ -1,13 +1,22 @@
 import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import type { Chunk } from '../types.js';
-import { withConnection } from './oracle.js';
+import { withConnection, withElevatedConnection } from './oracle.js';
 import { loadSql, splitStatements } from './sql.js';
 
-/** Run a .sql script, statement by statement, reporting which statement failed. */
-export async function runScript(name: string, extra: Record<string, string> = {}): Promise<void> {
+/**
+ * Run a .sql script, statement by statement, reporting which statement failed.
+ *
+ * `as` selects the credentials: the benchmark user for everything except creating that user.
+ */
+export async function runScript(
+  name: string,
+  extra: Record<string, string> = {},
+  as: 'bench' | 'elevated' = 'bench',
+): Promise<void> {
   const statements = splitStatements(loadSql(name, extra));
-  await withConnection(async (conn) => {
+  const runner = as === 'elevated' ? withElevatedConnection : withConnection;
+  await runner(async (conn) => {
     for (const [i, stmt] of statements.entries()) {
       try {
         await conn.execute(stmt);

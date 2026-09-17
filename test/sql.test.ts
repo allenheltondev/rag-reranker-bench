@@ -68,6 +68,26 @@ test('model-loading scripts render for both targets and split into four statemen
   assert.ok(adb[3]!.includes('LOAD_ONNX_MODEL_CLOUD'));
 });
 
+test('the user bootstrap scripts render and are re-runnable by construction', () => {
+  const stmts = splitStatements(loadSql('00_user.sql', {
+    BENCH_USER: 'BENCH', BENCH_PASSWORD: 'Secret_1', TABLESPACE: 'USERS',
+  }));
+  assert.ok(stmts.length >= 7, `expected the grants to split out, got ${stmts.length}`);
+  // Creating the user must not fail when it already exists, or bootstrap is a one-shot.
+  assert.ok(stmts[0]!.includes('ALTER USER BENCH IDENTIFIED BY "Secret_1"'));
+  assert.ok(stmts[0]!.includes('CREATE USER BENCH IDENTIFIED BY "Secret_1"'));
+  assert.ok(stmts.some((x) => x.includes('CREATE MINING MODEL')), 'no mining model grant');
+  assert.ok(stmts.some((x) => x.includes('CTXAPP')), 'no Oracle Text grant');
+  // Optional packages must be tolerated rather than aborting the script.
+  assert.ok(stmts.some((x) => x.includes('DBMS_CLOUD') && x.includes('EXCEPTION')));
+
+  const local = splitStatements(loadSql('00_user_local.sql', {
+    BENCH_USER: 'BENCH', ONNX_DIRECTORY: 'ONNX_DIR', ONNX_PATH: '/opt/oracle/onnx',
+  }));
+  assert.equal(local.length, 2);
+  assert.ok(local[0]!.includes("CREATE OR REPLACE DIRECTORY ONNX_DIR AS '/opt/oracle/onnx'"));
+});
+
 test('splitStatements drops comment-only fragments', () => {
   assert.deepEqual(splitStatements('-- just a comment\n/\nSELECT 1 FROM DUAL\n/'), ['SELECT 1 FROM DUAL']);
 });

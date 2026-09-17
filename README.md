@@ -170,8 +170,14 @@ model. The report records the version you actually ran.
 
 ### 2. The user
 
-Once, as SYS (container) or ADMIN (Autonomous): edit the `DEFINE`s at the top of
-[`sql/00_user.sql`](sql/00_user.sql) and run it. Everything after this runs as that user.
+```bash
+npm run bootstrap
+```
+
+Creates the benchmark user with the password from `.env`, grants it what the rest of the repo
+needs, and points the `ONNX_DIR` directory object at the mounted `models/oracle` folder. It is
+the only command that uses `ORACLE_SYS_PASSWORD`, and it is safe to re-run — an existing user
+has its password reset to match `.env` rather than erroring.
 
 ### 3. The models
 

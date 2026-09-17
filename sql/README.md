@@ -11,7 +11,8 @@ placeholders filled in.
 
 | File | What it does |
 |---|---|
-| `00_user.sql` | Creates the benchmark user and its grants. Run once as ADMIN/SYS from SQLcl; the only script not run through `npm`. |
+| `00_user.sql` | Creates the benchmark user and its grants. `npm run bootstrap`; the only script that runs with elevated credentials. |
+| `00_user_local.sql` | The `ONNX_DIR` directory object. Container only; bootstrap skips it on Autonomous. |
 | `01_schema.sql` | The chunk table: text, metadata, and a `VECTOR` column in one row. Creates the Oracle Text index used by the lexical arm. |
 | `02_vector_index.sql` | Optional approximate vector index. Not used by default (see below). |
 | `03_load_models.sql` | Loads both models from a directory object (container). `npm run models`. |

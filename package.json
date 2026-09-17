@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --import tsx test/*.test.ts",
     "corpus": "tsx src/cli.ts corpus",
+    "bootstrap": "tsx src/cli.ts bootstrap",
     "load": "tsx src/cli.ts load",
     "models": "tsx src/cli.ts models",
     "doctor": "tsx src/cli.ts doctor",

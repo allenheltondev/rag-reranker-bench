@@ -96,6 +96,53 @@ async function cmdLoad(): Promise<void> {
   }
 }
 
+/**
+ * Create the benchmark user. The one command that uses elevated credentials.
+ *
+ * Safe to re-run: an existing user has its password reset to what .env says rather than
+ * failing, so a forgotten password is fixed by running this again.
+ */
+async function cmdBootstrap(): Promise<void> {
+  const target = flag('adb') ? 'adb' : oracle.target;
+  if (!oracle.user || !oracle.password) {
+    throw new Error('ORACLE_USER and ORACLE_PASSWORD must be set. Copy .env.example to .env first.');
+  }
+  const user = assertIdentifier(oracle.user, 'ORACLE_USER');
+  // The password goes into DDL inside double quotes, so a double quote in it would terminate
+  // the identifier. Oracle does not allow one in a password anyway; fail clearly rather than
+  // emitting SQL that means something other than intended.
+  if (oracle.password.includes('"')) {
+    throw new Error('ORACLE_PASSWORD cannot contain a double quote.');
+  }
+  const tablespace = assertIdentifier(
+    oracle.tablespace || (target === 'adb' ? 'DATA' : 'USERS'),
+    'ORACLE_TABLESPACE',
+  );
+
+  log(`Creating ${user} on ${oracle.connectString} as ${oracle.sysUser}${target === 'adb' ? '' : ' (SYSDBA)'}...`);
+  await runScript('00_user.sql', {
+    BENCH_USER: user,
+    BENCH_PASSWORD: oracle.password,
+    TABLESPACE: tablespace,
+  }, 'elevated');
+  log(`  user and grants applied, quota on ${tablespace}`);
+
+  if (target === 'adb') {
+    log('  skipping the directory object: Autonomous reads models from Object Storage.');
+  } else {
+    const dir = assertIdentifier(oracle.onnxDirectory, 'ORACLE_ONNX_DIRECTORY');
+    await runScript('00_user_local.sql', {
+      BENCH_USER: user,
+      ONNX_DIRECTORY: dir,
+      ONNX_PATH: oracle.onnxPath.replace(/'/g, "''"),
+    }, 'elevated');
+    log(`  directory ${dir} -> ${oracle.onnxPath}, readable by ${user}`);
+  }
+
+  log('');
+  log('Next: put the ONNX files in ./models/oracle, then `npm run models`.');
+}
+
 /** Load the ONNX models into the database, from a directory object or from Object Storage. */
 async function cmdModels(): Promise<void> {
   const target = flag('adb') ? 'adb' : oracle.target;
@@ -261,6 +308,7 @@ function cmdHelp(): void {
   log(`rag-reranker-bench
 
   npm run corpus                      Generate the corpus and query set into data/
+  npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
   npm run load                        Create the schema and load the corpus into Oracle
   npm run models                      Load the ONNX models into the database (--adb for Object Storage)
   npm run doctor                      Check Oracle, the models, and the app reranker
@@ -289,6 +337,7 @@ Flags for doctor:
 
 const commands: Record<string, () => Promise<void> | void> = {
   corpus: cmdCorpus,
+  bootstrap: cmdBootstrap,
   load: cmdLoad,
   models: cmdModels,
   doctor: cmdDoctor,

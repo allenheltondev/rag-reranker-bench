@@ -43,6 +43,45 @@ export async function withConnection<T>(fn: (conn: oracledb.Connection) => Promi
   }
 }
 
+/**
+ * A standalone connection using elevated credentials, for the one operation the benchmark user
+ * cannot perform: creating itself. Not pooled, and never reused by the harness.
+ */
+export async function withElevatedConnection<T>(
+  fn: (conn: oracledb.Connection) => Promise<T>,
+): Promise<T> {
+  if (!oracle.sysPassword) {
+    throw new Error(
+      'ORACLE_SYS_PASSWORD must be set to create the benchmark user. For the container it is the '
+      + 'password you gave docker compose; for Autonomous Database it is the ADMIN password.',
+    );
+  }
+  if (oracle.clientLibDir) oracledb.initOracleClient({ libDir: oracle.clientLibDir });
+  const attrs: oracledb.ConnectionAttributes = {
+    user: oracle.sysUser,
+    password: oracle.sysPassword,
+    connectString: oracle.connectString,
+  };
+  // Autonomous Database has no SYSDBA for customers; ADMIN is an ordinary privileged user.
+  if (oracle.target !== 'adb') attrs.privilege = oracledb.SYSDBA;
+
+  let conn: oracledb.Connection;
+  try {
+    conn = await oracledb.getConnection(attrs);
+  } catch (err) {
+    const message = (err as Error).message;
+    if (message.includes('ORA-01017')) {
+      throw new Error(`${message}\n\nCheck ORACLE_SYS_USER / ORACLE_SYS_PASSWORD in .env.`);
+    }
+    throw err;
+  }
+  try {
+    return await fn(conn);
+  } finally {
+    await conn.close();
+  }
+}
+
 export async function closePool(): Promise<void> {
   if (pool) {
     await pool.close(5);

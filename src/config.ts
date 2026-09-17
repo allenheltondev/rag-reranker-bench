@@ -15,6 +15,13 @@ const list = (v: string | undefined, fallback: number[]): number[] =>
 export const oracle = {
   user: process.env.ORACLE_USER ?? '',
   password: process.env.ORACLE_PASSWORD ?? '',
+  /** Elevated credentials, used only by `npm run bootstrap` to create the benchmark user. */
+  sysUser: process.env.ORACLE_SYS_USER ?? 'sys',
+  sysPassword: process.env.ORACLE_SYS_PASSWORD ?? '',
+  /** Tablespace the benchmark user gets quota on. DATA on Autonomous, USERS on the container. */
+  tablespace: process.env.ORACLE_TABLESPACE ?? '',
+  /** Filesystem path the ONNX directory object points at, inside the database host. */
+  onnxPath: process.env.ORACLE_ONNX_PATH ?? '/opt/oracle/onnx',
   connectString: process.env.ORACLE_CONNECT_STRING ?? 'localhost:1521/FREEPDB1',
   /** Thin mode needs no Instant Client. Set ORACLE_CLIENT_LIB_DIR to force thick mode. */
   clientLibDir: process.env.ORACLE_CLIENT_LIB_DIR ?? '',

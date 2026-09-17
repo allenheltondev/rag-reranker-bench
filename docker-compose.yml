@@ -8,11 +8,8 @@
 #   docker compose up -d
 #   docker compose logs -f oracle     # wait for "DATABASE IS READY TO USE!"
 #
-# Then create the benchmark user and the ONNX_DIR directory object, both in sql/00_user.sql.
-# Connect to the FREEPDB1 service, not "/ as sysdba", or the user lands in the root container:
-#   docker compose cp sql/00_user.sql oracle:/tmp/00_user.sql
-#   docker compose exec oracle bash -c "sed -i 's/\r$//' /tmp/00_user.sql && sqlplus -s 'sys/<pw>@localhost:1521/FREEPDB1 as sysdba' @/tmp/00_user.sql"
-# (works from PowerShell too; the sed strips CRLF if git checked the file out that way)
+# Then create the benchmark user and the ONNX_DIR directory object, from the repo root:
+#   npm run bootstrap
 
 services:
   oracle:
