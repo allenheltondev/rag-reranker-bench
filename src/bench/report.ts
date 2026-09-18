@@ -257,7 +257,10 @@ export function compareRerankers(run: BenchRun, topK: number): AgreementRow[] {
   const byId = new Map(run.stages.map((s) => [s.stage.id, s]));
 
   for (const stageRun of run.stages) {
-    if (stageRun.stage.reranker !== 'in-db') continue;
+    // Treatments only. A control has no scoring to compare, and its id does not contain
+    // "rerank-in-db", so the substitution below would match it against itself and report a
+    // perfect agreement that means nothing.
+    if (stageRun.stage.reranker !== 'in-db' || stageRun.stage.role !== 'treatment') continue;
     const appId = stageRun.stage.id.replace('rerank-in-db', 'rerank-app');
     const appRun = byId.get(appId);
     if (!appRun) continue;
@@ -548,7 +551,16 @@ export function renderMarkdown(
   if (agreement.length > 0) {
     out.push('## Do the two paths rank the same way?');
     out.push('');
-    out.push('Same model, same candidates, different execution location. These should agree.');
+    out.push('Same weights, same candidates, different execution location.');
+    out.push('');
+    out.push('Jaccard is the one that matters: it says whether the same passages reach the model.');
+    out.push('Kendall tau below 1 with identical membership means the two arms ordered near-tied');
+    out.push('candidates differently, which quantized weights make likely - int8 compresses the');
+    out.push('score gaps, and the application arm scores in batches while the database scores one');
+    out.push('row per call, so activations are scaled over different inputs. Set');
+    out.push('APP_RERANK_BATCH_SIZE=1 to remove that difference and see whether the ordering');
+    out.push('converges. A Jaccard below 1, by contrast, would mean the arms disagree about which');
+    out.push('passages are relevant at all, and that is not a rounding effect.');
     out.push('');
     out.push(`| Retrieval | N | Top-${k} Jaccard | Kendall tau | Queries with a different top result |`);
     out.push('|---|---:|---:|---:|---|');
