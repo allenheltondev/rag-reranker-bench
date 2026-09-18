@@ -1,6 +1,33 @@
 import 'dotenv/config';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { RerankerId, RunConfig, Stage } from './types.js';
+
+/**
+ * Warn about a key assigned more than once in .env.
+ *
+ * dotenv keeps the last assignment and says nothing, so a stray empty line further down the
+ * file silently erases a value set above it. That is invisible from the outside: the setting
+ * simply appears never to have been made.
+ */
+function warnDuplicateEnvKeys(): void {
+  const file = resolve(process.env['DOTENV_CONFIG_PATH'] ?? '.env');
+  if (!existsSync(file)) return;
+  const seen = new Map<string, number>();
+  readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+    const key = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1];
+    if (!key) return;
+    const first = seen.get(key);
+    if (first === undefined) seen.set(key, i + 1);
+    else {
+      process.stderr.write(
+        `Warning: ${key} is set twice in .env (lines ${first} and ${i + 1}). `
+        + `The last assignment wins, so line ${first} has no effect.\n`,
+      );
+    }
+  });
+}
+warnDuplicateEnvKeys();
 
 const num = (v: string | undefined, fallback: number): number => {
   if (v === undefined || v.trim() === '') return fallback;
