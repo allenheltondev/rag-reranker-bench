@@ -66,7 +66,6 @@ def main() -> None:
         from onnx import TensorProto, helper
         import numpy as np
         from transformers import AutoTokenizer
-        from onnxruntime_extensions import gen_processing_models
         import onnxruntime as ort
         import onnxruntime_extensions as ox
     except ImportError as exc:
@@ -118,41 +117,68 @@ def main() -> None:
     print(f"  pair packs exactly with separator {separator!r}")
 
     # ---------------------------------------------------------------- tokenizer graph
-    # ---------------------------------------------------------------- tokenizer graph
-    # The converter takes several routes depending on the tokenizer family, and which one works
-    # is not knowable in advance: the default path wants the original vocabulary file beside the
-    # model, while schema_v2 embeds tokenizer.json into the graph instead. Try each and say
-    # which succeeded, rather than failing on the first.
+    # Built directly from the two tokenizer files rather than through gen_processing_models,
+    # which reaches the same operator only after trying to resolve the tokenizer by name
+    # against Hugging Face. Everything needed is already on disk: HfJsonTokenizer takes
+    # tokenizer.json and tokenizer_config.json as graph attributes.
     print("Building the tokenizer graph ...")
-    strategies = [
-        ("tokenizer.json embedded (schema_v2)", {"schema_v2": True}),
-        ("vocabulary file beside the model", {}),
-    ]
-    pre = None
-    failures = []
-    for label, kwargs in strategies:
-        try:
-            pre, _ = gen_processing_models(tokenizer, pre_kwargs={"CAST_TOKEN_ID": True}, **kwargs)
-            print(f"  built via: {label}")
-            break
-        except Exception as exc:
-            failures.append(f"  - {label}: {type(exc).__name__}: {exc}")
+    try:
+        from onnxruntime_extensions._cuops import SingleOpGraph
+    except ImportError as exc:
+        fail(f"onnxruntime-extensions is missing its graph builder: {exc}")
 
-    if pre is None:
-        detail = "\n".join(failures)
-        fail(
-            f"onnxruntime-extensions could not convert {type(tokenizer).__name__}.\n{detail}\n\n"
-            "If every route failed on a missing vocabulary file, the export is missing the\n"
-            "tokenizer's original model file. Re-run `npm run export:app-model`, which saves the\n"
-            "full tokenizer beside the graph."
-        )
+    vocab_file = model_dir / "tokenizer.json"
+    config_file = model_dir / "tokenizer_config.json"
+    for required in (vocab_file, config_file):
+        if not required.exists():
+            fail(f"{required} not found. Re-run `npm run export:app-model`.")
 
-    pre_outputs = [o.name for o in pre.graph.output]
-    print(f"  emits {pre_outputs}")
+    tok_graph = SingleOpGraph.build_graph(
+        "HfJsonTokenizer",
+        tokenizer_vocab=vocab_file.read_text(encoding="utf-8"),
+        tokenizer_config=config_file.read_text(encoding="utf-8"),
+    )
+    tok_node = tok_graph.node[0]
+    print(f"  {tok_node.op_type} from {vocab_file.name} + {config_file.name}")
 
     body = onnx.load(str(graph_path))
     body_inputs = [i.name for i in body.graph.input]
     print(f"  model body takes {body_inputs}")
+
+    # HfJsonTokenizer emits token ids only. The body also wants an attention mask, and BERT
+    # derivatives want segment ids, so both are synthesised from the ids' own shape. The mask
+    # is all ones because the database scores one row at a time: there is no batch, therefore
+    # no padding to mask out.
+    TOK_IN, IDS = "input", "__ids"
+    nodes = [helper.make_node(tok_node.op_type, [TOK_IN], [IDS], domain=tok_node.domain,
+                              name="tokenize", **{a.name: helper.get_attribute_value(a) for a in tok_node.attribute})]
+    nodes.append(helper.make_node("Cast", [IDS], ["__ids64"], to=TensorProto.INT64, name="cast_ids"))
+    shape_1xN = helper.make_tensor("__shape_1xN", TensorProto.INT64, [2], [1, -1])
+    nodes.append(helper.make_node("Reshape", ["__ids64", "__shape_1xN"], ["input_ids"], name="as_batch_of_one"))
+    nodes.append(helper.make_node("Shape", ["input_ids"], ["__shape"], name="ids_shape"))
+
+    initializers = [shape_1xN]
+    pre_outputs = ["input_ids"]
+    for name, value in (("attention_mask", 1), ("token_type_ids", 0)):
+        if name not in body_inputs:
+            continue
+        # The fill value rides on the node as an attribute; adding it to the graph's
+        # initializers as well leaves an unreferenced tensor that the runtime warns about.
+        const = helper.make_tensor(f"__{name}_value", TensorProto.INT64, [1], [value])
+        nodes.append(helper.make_node("ConstantOfShape", ["__shape"], [name],
+                                      value=const, name=f"make_{name}"))
+        pre_outputs.append(name)
+
+    pre_graph = helper.make_graph(
+        nodes, "tokenize",
+        [helper.make_tensor_value_info(TOK_IN, TensorProto.STRING, [None])],
+        [helper.make_tensor_value_info(n, TensorProto.INT64, [1, None]) for n in pre_outputs],
+        initializer=initializers,
+    )
+    pre = helper.make_model(pre_graph, opset_imports=[
+        helper.make_opsetid("", 17), helper.make_opsetid(tok_node.domain, 1),
+    ])
+    print(f"  emits {pre_outputs}")
 
     io_map = []
     for name in body_inputs:
@@ -162,12 +188,6 @@ def main() -> None:
                 "These have to line up before the two graphs can be merged."
             )
         io_map.append((name, name))
-
-    # Drop tokenizer outputs the body does not consume, or merging leaves dangling graph
-    # outputs that the database has no metadata for.
-    keep = {name for name, _ in io_map}
-    for output in [o for o in pre.graph.output if o.name not in keep]:
-        pre.graph.output.remove(output)
 
     print("Merging tokenizer into the model ...")
     try:
@@ -188,10 +208,6 @@ def main() -> None:
     merged.graph.output.append(helper.make_tensor_value_info(squeezed, TensorProto.FLOAT, [None]))
     for old in [o for o in merged.graph.output if o.name == out_name]:
         merged.graph.output.remove(old)
-
-    merged.graph.input[0].name = "input"
-    for node in merged.graph.node:
-        node.input[:] = ["input" if i == pre.graph.input[0].name else i for i in node.input]
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
