@@ -34,6 +34,43 @@ export function controlExpr(): string {
   return oracle.indbControlExpr || defaultControlExpr();
 }
 
+/** The SQL argument names a scoring expression supplies, i.e. every `AS <NAME>` in it. */
+export function scoreExprAttributes(expr: string): string[] {
+  return [...expr.matchAll(/\bAS\s+([A-Za-z][A-Za-z0-9_$#]*)/gi)].map((m) => m[1]!.toUpperCase());
+}
+
+/** The SQL argument names the loaded model declares, read from its input mapping JSON. */
+export function declaredAttributes(spec: string): string[] {
+  try {
+    const parsed = JSON.parse(spec) as Record<string, string[]>;
+    return Object.values(parsed).flat().map((s) => String(s).toUpperCase());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check the scoring expression against how the model was loaded.
+ *
+ * Getting these out of step is easy - the model's input mapping and the expression that feeds
+ * it live in different settings - and the database's complaint ("Missing mining attribute")
+ * names the argument it wanted without saying where the mismatch came from.
+ */
+export function describeAttributeMismatch(): string | null {
+  const declared = declaredAttributes(oracle.rerankInputSpec);
+  const supplied = scoreExprAttributes(scoreExpr());
+  if (declared.length === 0) return null;
+  const missing = declared.filter((d) => !supplied.includes(d));
+  if (missing.length === 0) return null;
+  return (
+    `The model was loaded declaring ${declared.join(', ')}, but the scoring expression supplies `
+    + `${supplied.join(', ') || 'nothing'}.\n`
+    + `ORACLE_INDB_SCORE_EXPR and ORACLE_RERANK_INPUT_SPEC have to agree. A model built by `
+    + `\`npm run augment:rerank-model\` takes one packed argument; that command prints the exact `
+    + `expression to use.`
+  );
+}
+
 export interface InDbOutcome {
   results: RankedResult[];
   /** Wall time for the single statement: filter, retrieve, fuse, rerank, return. */

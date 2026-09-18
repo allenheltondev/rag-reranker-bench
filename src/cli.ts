@@ -5,7 +5,7 @@ import { generateCorpus } from './corpus/generate.js';
 import { assertIdentifier, closePool, describeOracle, withConnection } from './db/oracle.js';
 import { countChunks, loadChunks, runScript } from './db/load.js';
 import { AppReranker } from './rerank/app.js';
-import { scoreExpr } from './rerank/indb.js';
+import { describeAttributeMismatch, scoreExpr } from './rerank/indb.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
 import { exportAppModel } from './tools/export-app-model.js';
@@ -361,6 +361,12 @@ async function cmdDoctor(): Promise<void> {
       log(`  skip ${oracle.rerankModel} not loaded — in-database reranking unavailable.`);
       log(`       Everything else works: npm run bench -- --rerankers none,app`);
     } else {
+      const mismatch = describeAttributeMismatch();
+      if (mismatch) {
+        log(`  FAIL in-DB scoring: ${mismatch.split('\n')[0]}`);
+        for (const line of mismatch.split('\n').slice(1)) log(`       ${line}`);
+        process.exitCode = 1;
+      } else
       await check(`in-DB scoring via ${oracle.indbRerankApi}`, async () => withConnection(async (conn) => {
         const r = await conn.execute<[number]>(
           `SELECT ${scoreExpr().replace(/TITLE \|\| '\. ' \|\| CONTENT/, `'the sky is blue'`)} FROM DUAL`,

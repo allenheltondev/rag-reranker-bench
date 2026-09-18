@@ -4,7 +4,7 @@ import { buildStages, runConfigFromEnv } from '../src/config.js';
 import { arms } from '../src/retrieval/candidates.js';
 import { loadSql, queryEmbedInput, render, splitStatements, usedBinds } from '../src/db/sql.js';
 import { assertIdentifier } from '../src/db/oracle.js';
-import { controlExpr, defaultScoreExpr, scoreExpr } from '../src/rerank/indb.js';
+import { controlExpr, declaredAttributes, defaultScoreExpr, scoreExpr, scoreExprAttributes } from '../src/rerank/indb.js';
 import type { Stage } from '../src/types.js';
 
 const RETRIEVALS: Array<Stage['retrieval']> = ['vector', 'lexical', 'hybrid-rrf'];
@@ -304,4 +304,23 @@ test('every stage binds exactly what its statement needs', () => {
       }
     }
   }
+});
+
+test('a scoring expression is checked against how the model was loaded', () => {
+  // The default two-input expression against a one-input model is exactly the misconfiguration
+  // the database reports as "Missing mining attribute", without saying which setting is wrong.
+  assert.deepEqual(
+    scoreExprAttributes(defaultScoreExpr('BGE_RERANKER')),
+    ['FIRST_INPUT', 'SECOND_INPUT'],
+  );
+  assert.deepEqual(
+    scoreExprAttributes("PREDICTION(M USING :qtext || '</s></s> ' || TITLE AS DATA)"),
+    ['DATA'],
+  );
+  assert.deepEqual(declaredAttributes('{ "input": ["DATA"] }'), ['DATA']);
+  assert.deepEqual(
+    declaredAttributes('{ "input": ["FIRST_INPUT", "SECOND_INPUT"] }'),
+    ['FIRST_INPUT', 'SECOND_INPUT'],
+  );
+  assert.deepEqual(declaredAttributes('not json'), []);
 });
