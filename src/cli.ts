@@ -361,11 +361,18 @@ async function cmdDoctor(): Promise<void> {
       log(`  skip ${oracle.rerankModel} not loaded — in-database reranking unavailable.`);
       log(`       Everything else works: npm run bench -- --rerankers none,app`);
     } else {
+      // Print what is actually in force. A scoring expression comes from .env, and the most
+      // common failure is that the variable never reached the process at all, which looks
+      // identical to having configured it wrongly.
+      const envSet = process.env['ORACLE_INDB_SCORE_EXPR'];
+      log(`  note scoring expression (${envSet ? 'from ORACLE_INDB_SCORE_EXPR' : 'built-in default; ORACLE_INDB_SCORE_EXPR is unset or empty'}):`);
+      log(`       ${scoreExpr()}`);
+
       const mismatch = describeAttributeMismatch();
       if (mismatch) {
+        failures++;
         log(`  FAIL in-DB scoring: ${mismatch.split('\n')[0]}`);
         for (const line of mismatch.split('\n').slice(1)) log(`       ${line}`);
-        process.exitCode = 1;
       } else
       await check(`in-DB scoring via ${oracle.indbRerankApi}`, async () => withConnection(async (conn) => {
         const r = await conn.execute<[number]>(
