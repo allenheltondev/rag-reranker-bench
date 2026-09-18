@@ -78,7 +78,13 @@ def main() -> None:
         fail(f"{graph_path} not found. Run `npm run export:app-model` first.")
 
     print(f"Loading tokenizer from {model_dir}")
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
+    print(f"  files present: {sorted(p.name for p in model_dir.iterdir() if p.is_file())}")
+    # Prefer the fast tokenizer: it carries tokenizer.json, which is the form the converter can
+    # embed directly without needing the original sentencepiece model beside it.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, use_fast=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
     print(f"  {type(tokenizer).__name__}")
 
     # ---------------------------------------------------------------- separator
@@ -112,11 +118,34 @@ def main() -> None:
     print(f"  pair packs exactly with separator {separator!r}")
 
     # ---------------------------------------------------------------- tokenizer graph
+    # ---------------------------------------------------------------- tokenizer graph
+    # The converter takes several routes depending on the tokenizer family, and which one works
+    # is not knowable in advance: the default path wants the original vocabulary file beside the
+    # model, while schema_v2 embeds tokenizer.json into the graph instead. Try each and say
+    # which succeeded, rather than failing on the first.
     print("Building the tokenizer graph ...")
-    try:
-        pre, _ = gen_processing_models(tokenizer, pre_kwargs={"CAST_TOKEN_ID": True})
-    except Exception as exc:
-        fail(f"onnxruntime-extensions cannot convert {type(tokenizer).__name__}: {exc}")
+    strategies = [
+        ("tokenizer.json embedded (schema_v2)", {"schema_v2": True}),
+        ("vocabulary file beside the model", {}),
+    ]
+    pre = None
+    failures = []
+    for label, kwargs in strategies:
+        try:
+            pre, _ = gen_processing_models(tokenizer, pre_kwargs={"CAST_TOKEN_ID": True}, **kwargs)
+            print(f"  built via: {label}")
+            break
+        except Exception as exc:
+            failures.append(f"  - {label}: {type(exc).__name__}: {exc}")
+
+    if pre is None:
+        detail = "\n".join(failures)
+        fail(
+            f"onnxruntime-extensions could not convert {type(tokenizer).__name__}.\n{detail}\n\n"
+            "If every route failed on a missing vocabulary file, the export is missing the\n"
+            "tokenizer's original model file. Re-run `npm run export:app-model`, which saves the\n"
+            "full tokenizer beside the graph."
+        )
 
     pre_outputs = [o.name for o in pre.graph.output]
     print(f"  emits {pre_outputs}")

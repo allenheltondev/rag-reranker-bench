@@ -138,7 +138,8 @@ async function cmdAugmentRerankModel(): Promise<void> {
   // Pinned: 0.15.2 publishes no Windows wheels at all, and 0.15.0's top out at CPython 3.13.
   const deps = spawnSync(
     venvPython,
-    ['-m', 'pip', 'install', '--quiet', 'onnx', 'onnxruntime', 'transformers', 'onnxruntime-extensions==0.15.0'],
+    ['-m', 'pip', 'install', '--quiet', 'onnx', 'onnxruntime', 'transformers', 'tokenizers',
+      'sentencepiece', 'protobuf', 'onnxruntime-extensions==0.15.0'],
     { stdio: 'inherit' },
   );
   if (deps.status !== 0) {
