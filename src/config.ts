@@ -53,7 +53,12 @@ export const oracle = {
   /** Thin mode needs no Instant Client. Set ORACLE_CLIENT_LIB_DIR to force thick mode. */
   clientLibDir: process.env.ORACLE_CLIENT_LIB_DIR ?? '',
   poolMin: num(process.env.ORACLE_POOL_MIN, 1),
-  poolMax: num(process.env.ORACLE_POOL_MAX, 4),
+  /**
+   * One by default. The harness issues a single statement at a time, so concurrency buys
+   * nothing - and every session that runs PREDICTION holds its own copy of the model in PGA,
+   * so a larger pool multiplies the database's memory requirement for no benefit.
+   */
+  poolMax: num(process.env.ORACLE_POOL_MAX, 1),
   /** Name of the ONNX embedding model loaded into the DB via DBMS_VECTOR.LOAD_ONNX_MODEL. */
   embedModel: process.env.ORACLE_EMBED_MODEL ?? 'DOC_EMBEDDER',
   /** Name of the ONNX cross-encoder loaded into the DB. */

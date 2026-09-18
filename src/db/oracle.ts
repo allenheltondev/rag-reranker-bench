@@ -15,16 +15,24 @@ export function hintFor(message: string): string {
     return `\n\nThe database ran out of PGA. Every session that runs PREDICTION holds the model in
 its own PGA, so the aggregate target has to exceed the model's size with room to work.
 
-docker-compose.yml now sets INIT_PGA_SIZE: 4096. Apply it with:
-  docker compose up -d --force-recreate oracle
-The data volume survives, so the schema, corpus and loaded models are still there.
+IMPORTANT: the container image applies INIT_PGA_SIZE only when it CREATES the database. If
+your volume already had one, recreating the container did NOT change it. Check what is really
+in force - \`npm run doctor\` prints it - and if it is still small, set it on the live database:
 
-Also keep ORACLE_POOL_MAX small (2 is plenty; the harness issues one statement at a time).
-Each pooled session that scores is another copy of the model in memory.
+  docker compose exec oracle sqlplus -s "sys/<pw>@localhost:1521/FREE as sysdba"
+    ALTER SYSTEM SET pga_aggregate_target = 3G SCOPE=SPFILE;
+    ALTER SYSTEM SET pga_aggregate_limit  = 6G SCOPE=SPFILE;
+    SHUTDOWN IMMEDIATE;
+    STARTUP;
 
-If it still fails, the model is too large for the memory available. Rebuild it smaller:
+The Free edition caps total memory, so those values may be refused or silently clamped. When
+they are, the model is simply too large to score inside this edition, and the fix is to make
+it smaller:
+
   npm run augment:rerank-model -- --quantize
-and set APP_RERANK_DTYPE=q8 so BOTH arms run the same weights.`;
+
+then re-upload it (npm run models:rerank) and set APP_RERANK_DTYPE=q8 so BOTH arms run the
+same weights. Quantizing one side only would end the comparison.`;
   }
   if (message.includes('ORA-54466') || message.includes('sskgm_mga_cr')) {
     return `\n\nThe database could not allocate memory to hold the model. Loading an ONNX model places
@@ -150,6 +158,9 @@ export interface OracleInfo {
   models: string[];
   /** CPUs the database believes it has. Not necessarily the host's, and that matters. */
   cpuCount: number | null;
+  /** PGA target and hard limit, in MB. The model is held per session in the PGA. */
+  pgaTargetMb: number | null;
+  pgaLimitMb: number | null;
 }
 
 export async function describeOracle(): Promise<OracleInfo> {
@@ -209,12 +220,31 @@ export async function describeOracle(): Promise<OracleInfo> {
       }
     }
 
+    // The container image applies INIT_PGA_SIZE only when it CREATES the database, so a
+    // recreate against an existing volume silently keeps the old value. Read what is actually
+    // in force rather than what the compose file asked for.
+    const param = async (name: string): Promise<number | null> => {
+      try {
+        const r = await conn.execute<{ out: number }>(
+          `DECLARE n BINARY_INTEGER; s VARCHAR2(4000); t BINARY_INTEGER;
+           BEGIN t := DBMS_UTILITY.GET_PARAMETER_VALUE(:p, n, s); :out := n; END;`,
+          { p: name, out: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } },
+        );
+        const v = (r.outBinds as { out: number } | undefined)?.out;
+        return v === undefined || v === null ? null : Math.round(Number(v) / 1024 / 1024);
+      } catch {
+        return null;
+      }
+    };
+
     return {
       version: conn.oracleServerVersionString,
       banner: banner.rows?.[0]?.BANNER ?? 'unknown',
       clientMode: oracledb.thin ? 'thin' : 'thick',
       models,
       cpuCount,
+      pgaTargetMb: await param('pga_aggregate_target'),
+      pgaLimitMb: await param('pga_aggregate_limit'),
     };
   });
 }

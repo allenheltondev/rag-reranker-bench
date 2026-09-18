@@ -342,6 +342,14 @@ async function cmdDoctor(): Promise<void> {
     // cpu_count, not the container's nproc: an edition cap or an instance setting can hold it
     // below what the OS exposes, and it governs how much of the machine in-database scoring
     // can actually use.
+    await check('database memory', async () => {
+      const info = await describeOracle();
+      return `pga_aggregate_target=${info.pgaTargetMb ?? '?'} MB · pga_aggregate_limit=${info.pgaLimitMb ?? '?'} MB`
+        + ` · pool max=${oracle.poolMax}`
+        + (info.pgaTargetMb !== null && info.pgaTargetMb < 2048
+          ? ' · likely too small to hold the cross-encoder; see the ORA-04036 guidance'
+          : '');
+    });
     await check('database CPUs', async () => {
       const info = await describeOracle();
       const host = cpus().length;

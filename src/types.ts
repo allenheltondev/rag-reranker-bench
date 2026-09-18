@@ -183,6 +183,8 @@ export interface EnvironmentInfo {
     embedModel: string;
     /** CPUs the database has, which on a container is its share and not the host's. */
     cpuCount: number | null;
+    pgaTargetMb: number | null;
+    pgaLimitMb: number | null;
     /** Present only when in-database reranking actually ran. */
     rerankModel?: string;
     indbRerankApi?: string;

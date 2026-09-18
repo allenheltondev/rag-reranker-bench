@@ -328,6 +328,10 @@ export function renderMarkdown(
     out.push(`| Embedding model | ${run.environment.oracle.embedModel} |`);
     const dbCpus = run.environment.oracle.cpuCount;
     out.push(`| Oracle CPUs | ${dbCpus ?? 'unknown'} (host has ${run.environment.cpus}) |`);
+    const pgaT = run.environment.oracle.pgaTargetMb;
+    if (pgaT !== null && pgaT !== undefined) {
+      out.push(`| Oracle PGA | target ${pgaT} MB, limit ${run.environment.oracle.pgaLimitMb ?? '?'} MB |`);
+    }
     if (run.environment.oracle.rerankModel) {
       out.push(`| In-DB rerank model | ${run.environment.oracle.rerankModel} via ${run.environment.oracle.indbRerankApi} |`);
     }
