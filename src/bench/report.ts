@@ -323,6 +323,8 @@ export function renderMarkdown(
   if (run.environment.oracle) {
     out.push(`| Oracle | ${run.environment.oracle.version} (${run.environment.oracle.clientMode} client) |`);
     out.push(`| Embedding model | ${run.environment.oracle.embedModel} |`);
+    const dbCpus = run.environment.oracle.cpuCount;
+    out.push(`| Oracle CPUs | ${dbCpus ?? 'unknown'} (host has ${run.environment.cpus}) |`);
     if (run.environment.oracle.rerankModel) {
       out.push(`| In-DB rerank model | ${run.environment.oracle.rerankModel} via ${run.environment.oracle.indbRerankApi} |`);
     }
@@ -330,6 +332,21 @@ export function renderMarkdown(
   if (run.environment.app) {
     out.push(`| App rerank model | ${run.environment.app.modelPath} |`);
     out.push(`| App execution | ${run.environment.app.executionProviders.join(', ')}, dtype ${run.environment.app.dtype}, intra-op threads ${run.environment.app.intraOpThreads} |`);
+  }
+  out.push('');
+  // A reranker comparison where one side has more CPU than the other is not measuring where
+  // inference runs. Say so on the face of the report rather than in a footnote.
+  const dbCpus = run.environment.oracle?.cpuCount;
+  const appThreads = run.environment.app?.intraOpThreads;
+  if (dbCpus && run.environment.app) {
+    const appEffective = appThreads === 'default' ? run.environment.cpus : Number(appThreads);
+    if (appEffective !== dbCpus) {
+      out.push('');
+      out.push(`> **The two arms did not have equal compute.** The database has ${dbCpus} CPU(s); the`);
+      out.push(`> application reranker ran with ${appThreads === 'default' ? `ONNX Runtime's default, which uses up to the host's ${run.environment.cpus}` : `${appThreads} thread(s)`}.`);
+      out.push('> Part of any latency difference below is that imbalance rather than where inference');
+      out.push(`> happens. Set APP_RERANK_THREADS=${dbCpus} to match them.`);
+    }
   }
   out.push('');
   out.push(`Queries: ${queries.length} · iterations: ${run.config.iterations} · warmup: ${run.config.warmup} · repeats: ${run.config.repeats} · top-K: ${k} · RRF k: ${run.config.rrfK}`);
@@ -489,6 +506,12 @@ export function renderMarkdown(
     out.push('up to the projection - one returns identifiers and a number, the other identifiers and');
     out.push('every candidate\'s full text - and neither runs inference. Their paired difference is');
     out.push('the cost of that text leaving the database.');
+    out.push('');
+    out.push('On a single machine this number is near zero and can come out negative, because the');
+    out.push('loopback interface costs nothing and the two controls do slightly different work in');
+    out.push('the database instead: one concatenates the text to measure it, the other just returns');
+    out.push('it. Treat a local figure as "too small to measure". It becomes meaningful only with');
+    out.push('the database and the application on separate hosts.');
     out.push('');
     out.push('| Retrieval | N | Text returned (app) | Returned (in-DB) | Transfer, median Δ (ms) | 95% CI | Pairs |');
     out.push('|---|---:|---:|---:|---:|---|---:|');

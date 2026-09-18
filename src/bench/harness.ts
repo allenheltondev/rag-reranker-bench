@@ -77,6 +77,7 @@ export async function captureEnvironment(cfg: RunConfig): Promise<EnvironmentInf
       banner: info.banner,
       clientMode: info.clientMode,
       embedModel: oracle.embedModel,
+      cpuCount: info.cpuCount,
     };
     // Naming the cross-encoder in a run that never invoked it would put a model in the
     // report's provenance that contributed nothing to its numbers.

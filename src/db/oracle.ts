@@ -148,6 +148,8 @@ export interface OracleInfo {
   banner: string;
   clientMode: string;
   models: string[];
+  /** CPUs the database believes it has. Not necessarily the host's, and that matters. */
+  cpuCount: number | null;
 }
 
 export async function describeOracle(): Promise<OracleInfo> {
@@ -169,11 +171,28 @@ export async function describeOracle(): Promise<OracleInfo> {
       // USER_MINING_MODELS is unavailable on some editions; the doctor command reports this.
       models = [];
     }
+    // The database's own CPU count, which on a container is its share rather than the host's.
+    // An application reranker using every core while the database has a fraction of them is
+    // not a comparison of where inference runs; it is a comparison of how much CPU each got.
+    let cpuCount: number | null = null;
+    try {
+      const r = await conn.execute<{ VALUE: string }>(
+        `SELECT VALUE FROM V$PARAMETER WHERE NAME = 'cpu_count'`,
+        {},
+        { outFormat: oracledb.OUT_FORMAT_OBJECT },
+      );
+      const raw = r.rows?.[0]?.VALUE;
+      cpuCount = raw === undefined ? null : Number(raw);
+    } catch {
+      cpuCount = null;
+    }
+
     return {
       version: conn.oracleServerVersionString,
       banner: banner.rows?.[0]?.BANNER ?? 'unknown',
       clientMode: oracledb.thin ? 'thin' : 'thick',
       models,
+      cpuCount,
     };
   });
 }
