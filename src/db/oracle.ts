@@ -3,6 +3,60 @@ import { oracle } from '../config.js';
 
 let pool: oracledb.Pool | null = null;
 
+/**
+ * Turn an Oracle error into something actionable.
+ *
+ * These are the failures this benchmark actually provokes, and each names a resource without
+ * saying which knob controls it: the model is held per session in the PGA, loaded through the
+ * container's shared memory, and read from a directory on the database host.
+ */
+export function hintFor(message: string): string {
+  if (message.includes('ORA-04036')) {
+    return `\n\nThe database ran out of PGA. Every session that runs PREDICTION holds the model in
+its own PGA, so the aggregate target has to exceed the model's size with room to work.
+
+docker-compose.yml now sets INIT_PGA_SIZE: 4096. Apply it with:
+  docker compose up -d --force-recreate oracle
+The data volume survives, so the schema, corpus and loaded models are still there.
+
+Also keep ORACLE_POOL_MAX small (2 is plenty; the harness issues one statement at a time).
+Each pooled session that scores is another copy of the model in memory.
+
+If it still fails, the model is too large for the memory available. Rebuild it smaller:
+  npm run augment:rerank-model -- --quantize
+and set APP_RERANK_DTYPE=q8 so BOTH arms run the same weights.`;
+  }
+  if (message.includes('ORA-54466') || message.includes('sskgm_mga_cr')) {
+    return `\n\nThe database could not allocate memory to hold the model. Loading an ONNX model places
+it in the MGA, which is carved out of the container's shared memory, and Docker's default
+/dev/shm is 64 MB - far less than a cross-encoder needs.
+
+docker-compose.yml now sets shm_size: 4gb. Apply it with:
+  docker compose up -d --force-recreate oracle
+The data volume survives, so the schema and corpus are still there afterwards.
+
+If it still fails, rebuild the model smaller:
+  npm run augment:rerank-model -- --quantize
+and set APP_RERANK_DTYPE=q8 in .env so BOTH arms run the same weights - otherwise the two
+sides are no longer comparable, which is the one thing this benchmark cannot tolerate.`;
+  }
+  if (message.includes('ORA-51962')) {
+    return `\n\nThe database has no vector memory configured, so it cannot build an approximate index.
+This is OPTIONAL: the benchmark uses exact search by default precisely so that ANN tuning is
+not a second variable, and your data is loaded and usable right now. To enable it anyway:
+  ALTER SYSTEM SET vector_memory_size = 512M SCOPE=SPFILE;
+  SHUTDOWN IMMEDIATE; STARTUP;
+then re-run with --vector-index.`;
+  }
+  if (message.includes('ORA-22288')) {
+    return `\n\nThe database could not open that file. It looks inside the directory object on the
+DATABASE host, not on your machine. Check what it can actually see:
+  docker compose exec oracle ls -l /opt/oracle/onnx
+Files go in ./models/oracle on the host, which docker-compose mounts there.`;
+  }
+  return '';
+}
+
 /** Oracle identifiers are interpolated into SQL (they cannot be bound), so validate them hard. */
 export function assertIdentifier(name: string, what: string): string {
   if (!/^[A-Za-z][A-Za-z0-9_$#]{0,127}$/.test(name)) {

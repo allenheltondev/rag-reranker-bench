@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
-import { assertIdentifier, closePool, describeOracle, withConnection } from './db/oracle.js';
+import { assertIdentifier, closePool, describeOracle, hintFor, withConnection } from './db/oracle.js';
 import { countChunks, loadChunks, runScript } from './db/load.js';
 import { AppReranker } from './rerank/app.js';
 import { describeAttributeMismatch, scoreExpr } from './rerank/indb.js';
@@ -551,7 +551,8 @@ try {
   await handler();
   await finish(process.exitCode === undefined ? 0 : Number(process.exitCode));
 } catch (err) {
+  const message = (err as Error).message;
   log('');
-  log(`Error: ${(err as Error).message}`);
+  log(`Error: ${message}${hintFor(message)}`);
   await finish(1);
 }

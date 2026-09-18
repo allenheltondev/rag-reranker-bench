@@ -1,7 +1,7 @@
 import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import type { Chunk } from '../types.js';
-import { withConnection, withElevatedConnection } from './oracle.js';
+import { hintFor, withConnection, withElevatedConnection } from './oracle.js';
 import { loadSql, splitStatements } from './sql.js';
 
 /**
@@ -29,44 +29,7 @@ export async function runScript(
       } catch (err) {
         const message = (err as Error).message;
         const head = stmt.split('\n').filter((l) => !l.trim().startsWith('--')).slice(0, 3).join('\n');
-        // ORA-22288 on a model load means the database cannot see the file. It is always a
-        // path problem on the database host, never a problem with the ONNX file itself, and
-        // the raw error does not say which path it looked in.
-        // ORA-54466 names the MGA, not shared memory, so the actual remedy is not obvious
-        // from the error or from anything it links to.
-        const mga = message.includes('ORA-54466') || message.includes('sskgm_mga_cr')
-          ? `\n\nThe database could not allocate memory to hold the model. Loading an ONNX model
-places it in the MGA, which is carved out of the container's shared memory, and Docker's
-default /dev/shm is 64 MB - far less than a cross-encoder needs.
-
-docker-compose.yml now sets shm_size: 4gb. Apply it with:
-  docker compose up -d --force-recreate oracle
-The data volume survives, so the schema and corpus are still there afterwards.
-
-If it still fails, the model itself is too large for the memory available. Rebuild it smaller:
-  npm run augment:rerank-model -- --quantize
-and set APP_RERANK_DTYPE=q8 in .env so BOTH arms run the same weights - otherwise the two
-sides are no longer comparable, which is the one thing this benchmark cannot tolerate.`
-          : '';
-        const vectorMemory = message.includes('ORA-51962')
-          ? `\n\nThe database has no vector memory configured, so it cannot build an approximate
-index. This is OPTIONAL: the benchmark uses exact search by default precisely so that ANN
-tuning is not a second variable, and your data is loaded and usable right now. To enable it
-anyway, on the container:
-  docker compose exec oracle sqlplus -s "sys/<pw>@localhost:1521/FREE as sysdba"
-  ALTER SYSTEM SET vector_memory_size = 512M SCOPE=SPFILE;
-  SHUTDOWN IMMEDIATE; STARTUP;
-then re-run with --vector-index.`
-          : '';
-        const hint = mga || vectorMemory || (message.includes('ORA-22288')
-          ? `\n\nThe database could not open that file. It looks inside the directory object on the
-DATABASE host, not on your machine. Check what it can actually see:
-  docker compose exec oracle ls -l /opt/oracle/onnx
-Files go in ./models/oracle on the host, which docker-compose mounts there. If that listing is
-empty, the file is not where you think it is; if the name differs, set ORACLE_EMBED_FILE or
-ORACLE_RERANK_FILE in .env to match.`
-          : '');
-        throw new Error(`${name}: statement ${i + 1} failed.\n${head}\n\n${message}${hint}`);
+        throw new Error(`${name}: statement ${i + 1} failed.\n${head}\n\n${message}${hintFor(message)}`);
       }
     }
     await conn.commit();
