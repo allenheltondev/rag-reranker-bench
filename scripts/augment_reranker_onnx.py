@@ -175,10 +175,15 @@ def main() -> None:
         [helper.make_tensor_value_info(n, TensorProto.INT64, [1, None]) for n in pre_outputs],
         initializer=initializers,
     )
+    # Match the body's IR version and default opset. onnx.compose refuses to merge models
+    # that disagree on either, and the body's are whatever the exporter wrote, which is
+    # generally older than the version of onnx doing the merge.
+    body_opset = next((o.version for o in body.opset_import if o.domain in ("", "ai.onnx")), 17)
     pre = helper.make_model(pre_graph, opset_imports=[
-        helper.make_opsetid("", 17), helper.make_opsetid(tok_node.domain, 1),
+        helper.make_opsetid("", body_opset), helper.make_opsetid(tok_node.domain, 1),
     ])
-    print(f"  emits {pre_outputs}")
+    pre.ir_version = body.ir_version
+    print(f"  emits {pre_outputs} (IR {pre.ir_version}, opset {body_opset})")
 
     io_map = []
     for name in body_inputs:
