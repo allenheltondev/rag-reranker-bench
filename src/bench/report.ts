@@ -322,6 +322,9 @@ export function renderMarkdown(
   out.push(`| Memory | ${run.environment.totalMemMb} MB |`);
   if (run.environment.oracle) {
     out.push(`| Oracle | ${run.environment.oracle.version} (${run.environment.oracle.clientMode} client) |`);
+    // The edition is in the banner, and it decides the resource caps the database runs under.
+    // A reader comparing this against their own numbers needs to know which one produced these.
+    out.push(`| Oracle edition | ${run.environment.oracle.banner} |`);
     out.push(`| Embedding model | ${run.environment.oracle.embedModel} |`);
     const dbCpus = run.environment.oracle.cpuCount;
     out.push(`| Oracle CPUs | ${dbCpus ?? 'unknown'} (host has ${run.environment.cpus}) |`);
@@ -342,7 +345,7 @@ export function renderMarkdown(
     const appEffective = appThreads === 'default' ? run.environment.cpus : Number(appThreads);
     if (appEffective !== dbCpus) {
       out.push('');
-      out.push(`> **The two arms did not have equal compute.** The database has ${dbCpus} CPU(s); the`);
+      out.push(`> **The two arms did not have equal compute.** The database has ${dbCpus} CPU(s)${/Free/i.test(run.environment.oracle?.banner ?? '') ? ' (the Free edition enforces a CPU cap regardless of what the host or container offers)' : ''}; the`);
       out.push(`> application reranker ran with ${appThreads === 'default' ? `ONNX Runtime's default, which uses up to the host's ${run.environment.cpus}` : `${appThreads} thread(s)`}.`);
       out.push('> Part of any latency difference below is that imbalance rather than where inference');
       out.push(`> happens. Set APP_RERANK_THREADS=${dbCpus} to match them.`);
