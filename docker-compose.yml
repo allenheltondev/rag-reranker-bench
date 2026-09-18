@@ -17,6 +17,11 @@ services:
     container_name: rag-reranker-bench-db
     ports:
       - "1521:1521"
+    # Loading an ONNX model allocates it in the MGA, which comes from the container's shared
+    # memory. Docker's default /dev/shm is 64 MB; a cross-encoder needs more than a gigabyte,
+    # and the failure is an opaque ORA-54466 / ORA-27300 "Cannot allocate memory" rather than
+    # anything naming shared memory.
+    shm_size: 4gb
     environment:
       ORACLE_PWD: ${ORACLE_SYS_PASSWORD:-ChangeMe_1}
       # Reranking a candidate pool is CPU-bound and memory-hungry; the defaults are too small.
