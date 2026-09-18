@@ -15,6 +15,7 @@
     "bootstrap": "tsx src/cli.ts bootstrap",
     "fetch:model": "tsx src/cli.ts fetch-model",
     "export:app-model": "tsx src/cli.ts export-app-model",
+    "augment:rerank-model": "tsx src/cli.ts augment-rerank-model",
     "load": "tsx src/cli.ts load",
     "models": "tsx src/cli.ts models",
     "models:embed": "tsx src/cli.ts models --model embed",

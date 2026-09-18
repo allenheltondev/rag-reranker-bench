@@ -57,6 +57,7 @@ test('model-loading scripts are one statement per model, embedding first', () =>
   // the count are load-bearing, not incidental.
   const local = splitStatements(loadSql('03_load_models.sql', {
     ONNX_DIRECTORY: 'ONNX_DIR', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
+    RERANK_INPUT: '{ "input": ["DATA"] }',
   }));
   assert.equal(local.length, 2);
   assert.ok(local[0]!.includes("'e.onnx'") && local[0]!.includes('DOC_EMBEDDER'));
@@ -68,10 +69,23 @@ test('model-loading scripts are one statement per model, embedding first', () =>
 
   const adb = splitStatements(loadSql('03_load_models_adb.sql', {
     PAR_BASE_URL: 'https://x/p/abc/n/ns/b/models/o/', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
+    RERANK_INPUT: '{ "input": ["DATA"] }',
   }));
   assert.equal(adb.length, 2);
   assert.ok(adb[0]!.includes("'https://x/p/abc/n/ns/b/models/o/e.onnx'"));
   assert.ok(adb[1]!.includes('LOAD_ONNX_MODEL_CLOUD') && adb[1]!.includes('r.onnx'));
+
+  // The two models are declared with different functions, and the cross-encoder's input
+  // mapping is substitutable because it depends on how its graph was built: one packed string
+  // for the augmented export, two inputs for a model from Oracle's own converter.
+  assert.ok(local[0]!.includes('"function"       : "embedding"'));
+  assert.ok(local[1]!.includes('"function" : "regression"'));
+  const twoInput = splitStatements(loadSql('03_load_models.sql', {
+    ONNX_DIRECTORY: 'ONNX_DIR', EMBED_FILE: 'e.onnx', RERANK_FILE: 'r.onnx',
+    RERANK_INPUT: '{ "input": ["FIRST_INPUT", "SECOND_INPUT"] }',
+  }));
+  assert.ok(twoInput[1]!.includes('["FIRST_INPUT", "SECOND_INPUT"]'));
+  assert.ok(!twoInput[0]!.includes('FIRST_INPUT'), 'the embedding statement took the reranker mapping');
 });
 
 test('splitStatements drops comment-only fragments', () => {

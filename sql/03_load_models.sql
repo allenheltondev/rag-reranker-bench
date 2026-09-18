@@ -12,7 +12,8 @@
 -- PREDICTION() hands the model raw text and the graph has to tokenize it. The application
 -- copy from scripts/export-reranker-onnx.sh is NOT that. See sql/README.md.
 --
--- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}, ${ONNX_DIRECTORY}, ${EMBED_FILE}, ${RERANK_FILE}
+-- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}, ${ONNX_DIRECTORY}, ${EMBED_FILE}, ${RERANK_FILE},
+--         ${RERANK_INPUT}
 
 BEGIN
   BEGIN
@@ -45,7 +46,7 @@ BEGIN
     model_name => '${RERANK_MODEL}',
     metadata   => JSON('{
       "function" : "regression",
-      "input"    : { "input": ["FIRST_INPUT", "SECOND_INPUT"] }
+      "input"    : ${RERANK_INPUT}
     }')
   );
 END;

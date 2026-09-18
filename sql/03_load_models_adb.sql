@@ -10,7 +10,8 @@
 -- DATA_PUMP_DIR followed by DBMS_VECTOR.LOAD_ONNX_MODEL with directory => 'DATA_PUMP_DIR',
 -- exactly as 03_load_models.sql does.
 --
--- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}, ${PAR_BASE_URL}, ${EMBED_FILE}, ${RERANK_FILE}
+-- Tokens: ${EMBED_MODEL}, ${RERANK_MODEL}, ${PAR_BASE_URL}, ${EMBED_FILE}, ${RERANK_FILE},
+--         ${RERANK_INPUT}
 
 BEGIN
   BEGIN
@@ -43,7 +44,7 @@ BEGIN
     uri        => '${PAR_BASE_URL}${RERANK_FILE}',
     metadata   => JSON('{
       "function" : "regression",
-      "input"    : { "input": ["FIRST_INPUT", "SECOND_INPUT"] }
+      "input"    : ${RERANK_INPUT}
     }')
   );
 END;

@@ -69,6 +69,16 @@ export const oracle = {
   embedQueryPrefix: process.env.ORACLE_EMBED_QUERY_PREFIX ?? '',
   embedDocPrefix: process.env.ORACLE_EMBED_DOC_PREFIX ?? '',
   rerankFile: process.env.ORACLE_RERANK_FILE ?? 'bge_reranker_base.onnx',
+  /**
+   * How LOAD_ONNX_MODEL maps the cross-encoder's graph inputs to SQL arguments.
+   *
+   * The default is the single-input form that scripts/augment_reranker_onnx.py produces,
+   * where the query and passage are packed into one string in SQL. A model built with
+   * Oracle's own two-input converter wants
+   *   { "input": ["FIRST_INPUT", "SECOND_INPUT"] }
+   * paired with the matching ORACLE_INDB_SCORE_EXPR.
+   */
+  rerankInputSpec: process.env.ORACLE_RERANK_INPUT_SPEC ?? '{ "input": ["DATA"] }',
 } as const;
 
 export const app = {

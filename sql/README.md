@@ -100,6 +100,37 @@ one variable: where the cross-encoder runs. With exact search, both paths see id
 candidates and the parity check can prove it. Turn the index on when you want to measure
 retrieval scaling — just don't change two things at once.
 
+## Why the cross-encoder takes one input here, not two
+
+Oracle's published example scores a pair with two arguments:
+
+```sql
+PREDICTION(model USING :q AS FIRST_INPUT, d.title || '. ' || c.content AS SECOND_INPUT)
+```
+
+`npm run augment:rerank-model` cannot produce a model shaped that way, and the reason is worth
+knowing before you try: every text tokenizer operator in the public onnxruntime-extensions
+library — `BertTokenizer`, `HfJsonTokenizer`, `SentencepieceTokenizer` — accepts **at most one
+string input**. Oracle's own converter must use a custom two-input operator that is not in the
+public package.
+
+So the augmented graph here takes one string, and the pair is packed in SQL instead:
+
+```sql
+PREDICTION(BGE_RERANKER USING :qtext || '</s></s>' || TITLE || '. ' || CONTENT AS DATA)
+```
+
+That is not an approximation. An XLM-RoBERTa cross-encoder encodes a pair as
+`<s> query </s></s> passage </s>`, and feeding `query</s></s>passage` as a single string
+produces exactly that sequence: the tokenizer parses the separator out of the text and adds
+the outer markers itself. The augmentation script verifies this equivalence against the real
+tokenizer and refuses to write a model if the two encodings differ, so a mismatch is caught
+before it becomes a silently wrong ranking.
+
+If you obtain a two-input model from Oracle's converter instead, set both
+`ORACLE_RERANK_INPUT_SPEC={ "input": ["FIRST_INPUT", "SECOND_INPUT"] }` and the matching
+`ORACLE_INDB_SCORE_EXPR`; everything else works unchanged.
+
 ## Two exports of the same model
 
 The application and the database both run `BAAI/bge-reranker-base`, but they need it packaged

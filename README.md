@@ -218,8 +218,17 @@ npm run models           # both
 ```
 
 The **embedding model** is a plain load of a prepared ONNX file. The **cross-encoder** must be
-the augmented export with the tokenizer inside the graph, because `PREDICTION()` hands it raw
-text — the `optimum` export above is not that, and Oracle's OML4Py utility is what produces it.
+an augmented export with the tokenizer inside the graph, because `PREDICTION()` hands it raw
+text — the `optimum` export above is not that. Build one from that same export:
+
+```bash
+npm run augment:rerank-model     # -> models/oracle/bge_reranker_base.onnx
+```
+
+It augments the file the application arm already runs, so both arms score with bit-identical
+weights, which is the property the whole comparison rests on. It packs the query and passage
+into a single input rather than Oracle's two-argument form, for a reason worth reading before
+you run it: [`sql/README.md`](sql/README.md#why-the-cross-encoder-takes-one-input-here-not-two).
 
 You do not have to wait for the cross-encoder to get real numbers out of Oracle. With only the
 embedding model loaded, retrieval, fusion, metadata filtering and application-side reranking

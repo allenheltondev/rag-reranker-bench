@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
@@ -96,6 +96,29 @@ async function cmdLoad(): Promise<void> {
     log('Skipped the approximate vector index (exact search keeps recall out of the comparison).');
     log('Pass --vector-index to create it anyway.');
   }
+}
+
+/**
+ * Augment the exported cross-encoder so the database can score raw text with it.
+ *
+ * Runs in the virtualenv `npm run export:app-model` already built, because it needs the same
+ * onnx and transformers versions that produced the graph it is modifying.
+ */
+async function cmdAugmentRerankModel(): Promise<void> {
+  const { spawnSync } = await import('node:child_process');
+  const venvPython = process.platform === 'win32'
+    ? resolve('.venv-export/Scripts/python.exe')
+    : resolve('.venv-export/bin/python');
+  if (!existsSync(venvPython)) {
+    throw new Error('Run `npm run export:app-model` first: this uses the environment it builds.');
+  }
+  log('Installing the graph-surgery dependency (onnxruntime-extensions) ...');
+  const install = spawnSync(venvPython, ['-m', 'pip', 'install', '--quiet', 'onnxruntime-extensions'], { stdio: 'inherit' });
+  if (install.status !== 0) throw new Error('Could not install onnxruntime-extensions.');
+
+  const passthrough = args.slice(1);
+  const res = spawnSync(venvPython, [resolve('scripts/augment_reranker_onnx.py'), ...passthrough], { stdio: 'inherit' });
+  if (res.status !== 0) throw new Error(`Augmentation failed with exit code ${res.status}.`);
 }
 
 /** Export the application-side cross-encoder. Cross-platform; see src/tools/export-app-model.ts. */
@@ -242,6 +265,7 @@ async function cmdModels(): Promise<void> {
       PAR_BASE_URL: base.replace(/'/g, "''"),
       EMBED_FILE: oracle.embedFile,
       RERANK_FILE: oracle.rerankFile,
+      RERANK_INPUT: oracle.rerankInputSpec,
     }, 'bench', indices);
   } else {
     log(`Loading ${what} from directory ${oracle.onnxDirectory}...`);
@@ -249,6 +273,7 @@ async function cmdModels(): Promise<void> {
       ONNX_DIRECTORY: assertIdentifier(oracle.onnxDirectory, 'ORACLE_ONNX_DIRECTORY'),
       EMBED_FILE: oracle.embedFile,
       RERANK_FILE: oracle.rerankFile,
+      RERANK_INPUT: oracle.rerankInputSpec,
     }, 'bench', indices);
   }
   const info = await describeOracle();
@@ -406,6 +431,7 @@ function cmdHelp(): void {
   npm run bootstrap                   Create the benchmark user (uses ORACLE_SYS_PASSWORD)
   npm run fetch:model -- <url>        Download a database-side ONNX model (unzips if needed)
   npm run export:app-model            Export the application-side cross-encoder to ONNX
+  npm run augment:rerank-model        Add a tokenizer to that export so the database can load it
   npm run load                        Create the schema and load the corpus into Oracle
   npm run models                      Load both ONNX models into the database
   npm run models:embed                Load only the embedding model
@@ -439,6 +465,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   bootstrap: cmdBootstrap,
   'fetch-model': cmdFetchModel,
   'export-app-model': cmdExportAppModel,
+  'augment-rerank-model': cmdAugmentRerankModel,
   load: cmdLoad,
   models: cmdModels,
   doctor: cmdDoctor,
