@@ -1,3 +1,4 @@
+import { cpus } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
