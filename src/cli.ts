@@ -106,32 +106,50 @@ async function cmdLoad(): Promise<void> {
  */
 async function cmdAugmentRerankModel(): Promise<void> {
   const { spawnSync } = await import('node:child_process');
-  const venvPython = process.platform === 'win32'
-    ? resolve('.venv-export/Scripts/python.exe')
-    : resolve('.venv-export/bin/python');
-  if (!existsSync(venvPython)) {
-    throw new Error('Run `npm run export:app-model` first: this uses the environment it builds.');
+  const { findPython } = await import('./tools/export-app-model.js');
+
+  if (!existsSync(resolve(app.modelPath, 'onnx', 'model.onnx'))) {
+    throw new Error(`No export found at ${app.modelPath}. Run \`npm run export:app-model\` first.`);
   }
-  // Pinned: 0.15.2 publishes no Windows wheels at all, so an unpinned install fails there
-  // with "no matching distribution" while working fine on Linux. 0.15.0 ships win_amd64
-  // wheels for CPython 3.10-3.13 and is API-identical for the tokenizer graph generation
-  // this uses.
-  log('Installing the graph-surgery dependency (onnxruntime-extensions==0.15.0) ...');
+
+  // A separate environment from the export's, for two reasons: the augmentation needs no
+  // torch (so this stays small), and onnxruntime-extensions publishes wheels for a narrower
+  // set of Python versions than the exporter does, so it may need an older interpreter than
+  // the export ran on.
+  const venvDir = resolve('.venv-augment');
+  const venvPython = process.platform === 'win32'
+    ? resolve(venvDir, 'Scripts', 'python.exe')
+    : resolve(venvDir, 'bin', 'python');
+
+  if (!existsSync(venvPython)) {
+    const python = findPython(['3.13', '3.12', '3.11', '3.10']);
+    log(`Creating ${venvDir} with ${python.join(' ')} ...`);
+    const venv = spawnSync(python[0]!, [...python.slice(1), '-m', 'venv', venvDir], { stdio: 'inherit' });
+    if (venv.status !== 0) throw new Error('Could not create the augmentation environment.');
+  }
+
+  log('Installing onnx, onnxruntime, transformers and onnxruntime-extensions==0.15.0 ...');
   const install = spawnSync(
     venvPython,
-    ['-m', 'pip', 'install', '--quiet', 'onnxruntime-extensions==0.15.0'],
+    ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'],
     { stdio: 'inherit' },
   );
-  if (install.status !== 0) {
+  if (install.status !== 0) throw new Error('pip upgrade failed.');
+  // Pinned: 0.15.2 publishes no Windows wheels at all, and 0.15.0's top out at CPython 3.13.
+  const deps = spawnSync(
+    venvPython,
+    ['-m', 'pip', 'install', '--quiet', 'onnx', 'onnxruntime', 'transformers', 'onnxruntime-extensions==0.15.0'],
+    { stdio: 'inherit' },
+  );
+  if (deps.status !== 0) {
     throw new Error(
-      'Could not install onnxruntime-extensions==0.15.0.\n'
-      + 'It ships wheels for CPython 3.10-3.13 on Windows; if your Python is outside that range, '
-      + 'delete .venv-export, install a supported Python, and run `npm run export:app-model` again.',
+      'Could not install the augmentation dependencies.\n'
+      + 'onnxruntime-extensions ships wheels for CPython 3.10-3.13 only. Delete .venv-augment, '
+      + 'install one of those versions, and run this again.',
     );
   }
 
-  const passthrough = args.slice(1);
-  const res = spawnSync(venvPython, [resolve('scripts/augment_reranker_onnx.py'), ...passthrough], { stdio: 'inherit' });
+  const res = spawnSync(venvPython, [resolve('scripts/augment_reranker_onnx.py'), ...args.slice(1)], { stdio: 'inherit' });
   if (res.status !== 0) throw new Error(`Augmentation failed with exit code ${res.status}.`);
 }
 

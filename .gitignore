@@ -15,3 +15,4 @@ models/
 
 # Created by `npm run export:app-model`
 .venv-export/
+.venv-augment/

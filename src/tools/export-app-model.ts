@@ -27,21 +27,46 @@ function run(cmd: string, args: string[], label: string): void {
   if (res.status !== 0) throw new Error(`${label} failed with exit code ${res.status}.`);
 }
 
-/** Find a usable Python. Windows installs vary more than any other part of this. */
-function findPython(): string[] {
-  const candidates: string[][] = isWindows
+export function pythonVersion(candidate: readonly string[]): string | null {
+  const [cmd, ...rest] = candidate;
+  const res = spawnSync(cmd!, [...rest, '--version'], { stdio: 'pipe', encoding: 'utf8' });
+  if (res.status !== 0) return null;
+  const text = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+  return /Python (\d+\.\d+)/.exec(text)?.[1] ?? null;
+}
+
+/**
+ * Find a usable Python, optionally restricted to versions a dependency has wheels for.
+ *
+ * Whatever `python` happens to be on PATH is often newer than the compiled wheels a package
+ * publishes, and pip's message for that case ("no matching distribution ... from versions:
+ * none") does not mention the version at all. On Windows the `py` launcher can select an
+ * older interpreter explicitly, so ask it for one before falling back.
+ */
+export function findPython(allowed?: readonly string[]): string[] {
+  const explicit: string[][] = isWindows && allowed
+    ? allowed.map((v) => ['py', `-${v}`])
+    : [];
+  const generic: string[][] = isWindows
     ? [['py', '-3'], ['python'], ['python3']]
     : [['python3'], ['python']];
-  for (const candidate of candidates) {
-    const [cmd, ...rest] = candidate;
-    const res = spawnSync(cmd!, [...rest, '--version'], { stdio: 'pipe' });
-    if (res.status === 0) return candidate;
+
+  for (const candidate of [...explicit, ...generic]) {
+    const version = pythonVersion(candidate);
+    if (version === null) continue;
+    if (allowed && !allowed.includes(version)) continue;
+    return candidate;
   }
+
+  const found = generic.map((c) => `${c.join(' ')} -> ${pythonVersion(c) ?? 'not found'}`);
   throw new Error(
-    'No Python 3 found. The ONNX export needs it (Hugging Face optimum is a Python tool).\n'
+    (allowed
+      ? `No Python ${allowed.join(' / ')} found, and the dependency publishes wheels only for those.\n`
+      : 'No Python 3 found.\n')
+    + `Interpreters tried: ${found.join(', ')}\n`
     + (isWindows
-      ? 'Install it from python.org or the Microsoft Store, then reopen your terminal.'
-      : 'Install python3 with your package manager.'),
+      ? 'Install one from python.org; the `py` launcher will then be able to select it.'
+      : 'Install one with your package manager.'),
   );
 }
 
