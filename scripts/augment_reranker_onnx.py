@@ -86,35 +86,11 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
     print(f"  {type(tokenizer).__name__}")
 
-    # ---------------------------------------------------------------- separator
-    # The string that has to sit between query and passage so that packing the pair into one
-    # sequence reproduces the model's own pair encoding. Derived from the tokenizer rather
-    # than assumed, because BERT-family models use a single [SEP] and RoBERTa-family use two.
-    pair = tokenizer("QUERYSIDE", text_pair="PASSAGESIDE")["input_ids"]
-    decoded = tokenizer.decode(pair)
-    print(f"  native pair encoding: {decoded}")
-
-    sep = tokenizer.sep_token or tokenizer.eos_token
-    if sep is None:
-        fail("the tokenizer defines neither a sep_token nor an eos_token, so a pair cannot be packed.")
-
-    separator = None
-    for candidate in (sep + sep, sep):
-        packed = tokenizer(f"QUERYSIDE{candidate}PASSAGESIDE")["input_ids"]
-        if packed == pair:
-            separator = candidate
-            break
-
-    if separator is None:
-        packed = tokenizer("QUERYSIDE" + sep + "PASSAGESIDE")["input_ids"]
-        fail(
-            "packing the pair into one string does not reproduce this model's pair encoding.\n"
-            f"  native : {pair}\n"
-            f"  packed : {packed}\n"
-            "A single-input graph would therefore score something the model was not trained on.\n"
-            "This model needs Oracle's own two-input converter; see sql/README.md."
-        )
-    print(f"  pair packs exactly with separator {separator!r}")
+    # ---------------------------------------------------------------- reference encoding
+    # What the model actually expects for a pair. Everything below is judged against this.
+    probe_q, probe_d = "what colour is the sky", "The sky is blue."
+    native = list(tokenizer(probe_q, text_pair=probe_d)["input_ids"])
+    print(f"  the model's own pair encoding is {len(native)} tokens: {native[:8]}...")
 
     # ---------------------------------------------------------------- tokenizer graph
     # Built directly from the two tokenizer files rather than through gen_processing_models,
@@ -153,11 +129,30 @@ def main() -> None:
     nodes = [helper.make_node(tok_node.op_type, [TOK_IN], [IDS], domain=tok_node.domain,
                               name="tokenize", **{a.name: helper.get_attribute_value(a) for a in tok_node.attribute})]
     nodes.append(helper.make_node("Cast", [IDS], ["__ids64"], to=TensorProto.INT64, name="cast_ids"))
+
+    # The operator emits raw ids: it does not apply the tokenizer's post-processor, so the
+    # sequence markers a pair is normally wrapped in are missing. They are added here as graph
+    # constants rather than as text, because a special token written into the text makes the
+    # metaspace pre-tokenizer emit a stray separator token ahead of it. The ids are exact and
+    # position-independent; the text route is neither.
+    bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.cls_token_id
+    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else tokenizer.sep_token_id
+    initializers = []
+    wrapped = ["__ids64"]
+    if bos_id is not None:
+        initializers.append(helper.make_tensor("__bos", TensorProto.INT64, [1], [int(bos_id)]))
+        wrapped.insert(0, "__bos")
+    if eos_id is not None:
+        initializers.append(helper.make_tensor("__eos", TensorProto.INT64, [1], [int(eos_id)]))
+        wrapped.append("__eos")
+    print(f"  wrapping ids with bos={bos_id} eos={eos_id}")
+    nodes.append(helper.make_node("Concat", wrapped, ["__full"], axis=0, name="add_markers"))
+
     shape_1xN = helper.make_tensor("__shape_1xN", TensorProto.INT64, [2], [1, -1])
-    nodes.append(helper.make_node("Reshape", ["__ids64", "__shape_1xN"], ["input_ids"], name="as_batch_of_one"))
+    initializers.append(shape_1xN)
+    nodes.append(helper.make_node("Reshape", ["__full", "__shape_1xN"], ["input_ids"], name="as_batch_of_one"))
     nodes.append(helper.make_node("Shape", ["input_ids"], ["__shape"], name="ids_shape"))
 
-    initializers = [shape_1xN]
     pre_outputs = ["input_ids"]
     for name, value in (("attention_mask", 1), ("token_type_ids", 0)):
         if name not in body_inputs:
@@ -193,6 +188,64 @@ def main() -> None:
                 "These have to line up before the two graphs can be merged."
             )
         io_map.append((name, name))
+
+    # ------------------------------------------------------- choose the SQL packing
+    # The operator emits raw token ids: it does NOT apply the tokenizer's post-processor, so
+    # the markers a pair normally gets wrapped in have to arrive as part of the text. Rather
+    # than assume a template, run the operator on each candidate and keep the one whose ids
+    # equal what the model expects. If none match, the two arms would tokenize differently and
+    # the comparison would be meaningless, so that is a hard failure.
+    # Whitespace around the separator matters: the metaspace pre-tokenizer marks a word start,
+    # so a passage that begins immediately after a special token tokenizes differently from the
+    # same passage tokenized on its own. Enumerate the placements rather than reason about it.
+    sep = tokenizer.sep_token or tokenizer.eos_token or ""
+    candidates = []
+    for count in (2, 1):
+        joiner = sep * count
+        for before in ("", " "):
+            for after in ("", " "):
+                label = f"query{before}{'</s>' * count}{after}passage".replace("</s>", sep)
+                candidates.append((label, f"{{q}}{before}{joiner}{after}{{d}}"))
+
+    print("Finding the packing whose in-database tokenization matches the model's ...")
+    tok_only = helper.make_model(
+        helper.make_graph([nodes[0]], "tok",
+                          [helper.make_tensor_value_info(TOK_IN, TensorProto.STRING, [None])],
+                          [helper.make_tensor_value_info(IDS, TensorProto.INT64, [None])]),
+        opset_imports=[helper.make_opsetid("", body_opset), helper.make_opsetid(tok_node.domain, 1)],
+    )
+    tok_only.ir_version = body.ir_version
+    so = ort.SessionOptions()
+    so.register_custom_ops_library(ox.get_library_path())
+    try:
+        tok_sess = ort.InferenceSession(tok_only.SerializeToString(), so, providers=["CPUExecutionProvider"])
+    except Exception as exc:
+        fail(f"the tokenizer graph does not run: {exc}")
+
+    template = None
+    for label, pattern in candidates:
+        packed = pattern.format(q=probe_q, d=probe_d)
+        raw = tok_sess.run(None, {TOK_IN: np.array([packed])})[0].reshape(-1).tolist()
+        # What the merged graph will actually feed the model, markers included.
+        got = ([int(bos_id)] if bos_id is not None else []) + raw + ([int(eos_id)] if eos_id is not None else [])
+        if got == native:
+            print(f"  {label:34s} MATCH")
+            template = pattern
+            break
+        # Show where it first diverges; the position tells you whether the problem is the
+        # markers, the separator, or the passage's leading word.
+        at = next((i for i, (a, b) in enumerate(zip(got, native)) if a != b), min(len(got), len(native)))
+        print(f"  {label:34s} differs at token {at} ({len(got)} vs {len(native)} tokens)")
+
+    if template is None:
+        fail(
+            "no packing reproduced the model's own pair encoding.\n"
+            f"  expected : {native}\n"
+            "The in-database arm would tokenize differently from the application arm, so their\n"
+            "scores would not be comparable and the benchmark's central claim would be false.\n"
+            "Report this output; it needs a graph-level fix rather than a different SQL string."
+        )
+    print(f"  using: {template}")
 
     print("Merging tokenizer into the model ...")
     try:
@@ -237,8 +290,8 @@ def main() -> None:
         so.register_custom_ops_library(ox.get_library_path())
         sess = ort.InferenceSession(str(out_path), so, providers=["CPUExecutionProvider"])
         name = sess.get_inputs()[0].name
-        good = sess.run(None, {name: np.array([f"what colour is the sky{separator}The sky is blue."])})[0]
-        bad = sess.run(None, {name: np.array([f"what colour is the sky{separator}Grass is green."])})[0]
+        good = sess.run(None, {name: np.array([template.format(q=probe_q, d="The sky is blue.")])})[0]
+        bad = sess.run(None, {name: np.array([template.format(q=probe_q, d="Grass is green.")])})[0]
         print(f"  matching pair   {float(good[0]):+.4f}")
         print(f"  mismatched pair {float(bad[0]):+.4f}")
         if float(good[0]) <= float(bad[0]):
@@ -249,7 +302,22 @@ def main() -> None:
         print(f"  could not run the graph locally: {exc}")
         print("  The file was still written; the database will be the real test.")
 
-    sql_sep = separator.replace("'", "''")
+    def sql_literal(text: str) -> str:
+        return "'" + text.replace("'", "''") + "'"
+
+    # Turn the winning template into a SQL concatenation of literals and columns.
+    sql_expr = (
+        template.replace("{q}", "\x00Q\x00").replace("{d}", "\x00D\x00")
+    )
+    parts = []
+    for chunk in sql_expr.split("\x00"):
+        if chunk == "Q":
+            parts.append(":qtext")
+        elif chunk == "D":
+            parts.append("TITLE || '. ' || CONTENT")
+        elif chunk:
+            parts.append(sql_literal(chunk))
+    packed_sql = " || ".join(parts)
     print(f"""
 Next steps:
 
@@ -257,7 +325,7 @@ Next steps:
 
   2. Put this in .env - the pair is packed in SQL because the graph takes one input:
 
-     ORACLE_INDB_SCORE_EXPR=PREDICTION({os.environ.get('ORACLE_RERANK_MODEL', 'BGE_RERANKER')} USING :qtext || '{sql_sep}' || TITLE || '. ' || CONTENT AS DATA)
+     ORACLE_INDB_SCORE_EXPR=PREDICTION({os.environ.get('ORACLE_RERANK_MODEL', 'BGE_RERANKER')} USING {packed_sql} AS DATA)
 
   3. npm run doctor
 
