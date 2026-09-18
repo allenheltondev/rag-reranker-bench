@@ -1,5 +1,5 @@
 import { cpus } from 'node:os';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
@@ -346,11 +346,15 @@ async function cmdDoctor(): Promise<void> {
     // can actually use.
     await check('database memory', async () => {
       const info = await describeOracle();
+      // Judge the PGA against the model that has to fit in it, not against a fixed number:
+      // a quantized model fits comfortably where an fp32 one cannot.
+      const modelPath = resolve(paths.oracleModels, oracle.rerankFile);
+      const modelMb = existsSync(modelPath) ? Math.round(statSync(modelPath).size / 1024 / 1024) : null;
+      const tight = info.pgaTargetMb !== null && modelMb !== null && info.pgaTargetMb < modelMb * 1.5;
       return `pga_aggregate_target=${info.pgaTargetMb ?? '?'} MB · pga_aggregate_limit=${info.pgaLimitMb ?? '?'} MB`
         + ` · pool max=${oracle.poolMax}`
-        + (info.pgaTargetMb !== null && info.pgaTargetMb < 2048
-          ? ' · likely too small to hold the cross-encoder; see the ORA-04036 guidance'
-          : '');
+        + (modelMb === null ? '' : ` · model=${modelMb} MB`)
+        + (tight ? ' · too small to hold that model with room to work; see the ORA-04036 guidance' : '');
     });
     await check('database CPUs', async () => {
       const info = await describeOracle();
@@ -421,7 +425,18 @@ async function cmdDoctor(): Promise<void> {
       await reranker.close();
       const top = out.results[0]?.chunkId;
       if (top !== 'a') throw new Error(`ranked '${top}' above the matching passage — check the score expression`);
-      return `${app.modelPath} scored 2 pairs correctly`;
+      // The one difference that makes the benchmark meaningless is the two arms running
+      // differently-quantized weights, and nothing about a successful load reveals it.
+      const quantizedExists = existsSync(resolve(app.modelPath, 'onnx', 'model_quantized.onnx'));
+      const usingQuantized = app.dtype === 'q8' || app.dtype === 'int8' || app.dtype === 'uint8';
+      if (quantizedExists && !usingQuantized) {
+        throw new Error(
+          `a quantized model exists at ${app.modelPath}/onnx/model_quantized.onnx but `
+          + `APP_RERANK_DTYPE=${app.dtype}. The database is scoring with the quantized weights and `
+          + `this arm would not be. Set APP_RERANK_DTYPE=q8.`,
+        );
+      }
+      return `${app.modelPath} · dtype=${app.dtype} · scored 2 pairs correctly`;
     });
   }
 
