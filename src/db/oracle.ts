@@ -186,44 +186,24 @@ export async function describeOracle(): Promise<OracleInfo> {
     // An application reranker using every core while the database has a fraction of them is
     // not a comparison of where inference runs; it is a comparison of how much CPU each got.
     //
-    // V$PARAMETER needs a catalog grant the benchmark user may not have, so fall back to
-    // DBMS_UTILITY, which any session can call.
-    let cpuCount: number | null = null;
-    try {
-      const r = await conn.execute<{ VALUE: string }>(
-        `SELECT VALUE FROM V$PARAMETER WHERE NAME = 'cpu_count'`,
-        {},
-        { outFormat: oracledb.OUT_FORMAT_OBJECT },
-      );
-      const raw = r.rows?.[0]?.VALUE;
-      if (raw !== undefined) cpuCount = Number(raw);
-    } catch {
-      cpuCount = null;
-    }
-    if (cpuCount === null || Number.isNaN(cpuCount)) {
-      try {
-        const r = await conn.execute<{ out: number }>(
-          `DECLARE
-             n BINARY_INTEGER;
-             s VARCHAR2(4000);
-             t BINARY_INTEGER;
-           BEGIN
-             t := DBMS_UTILITY.GET_PARAMETER_VALUE('cpu_count', n, s);
-             :out := n;
-           END;`,
-          { out: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } },
-        );
-        const value = (r.outBinds as { out: number } | undefined)?.out;
-        cpuCount = value === undefined ? null : Number(value);
-      } catch {
-        cpuCount = null;
-      }
-    }
-
-    // The container image applies INIT_PGA_SIZE only when it CREATES the database, so a
-    // recreate against an existing volume silently keeps the old value. Read what is actually
-    // in force rather than what the compose file asked for.
+    // V$PARAMETER returns values as strings, which matters: pga_aggregate_target is a byte
+    // count that overflows the BINARY_INTEGER the DBMS_UTILITY route hands back. That route
+    // stays as a fallback for a user without the catalog grant.
     const param = async (name: string): Promise<number | null> => {
+      try {
+        const r = await conn.execute<{ VALUE: string }>(
+          `SELECT VALUE FROM V$PARAMETER WHERE NAME = :n`,
+          { n: name },
+          { outFormat: oracledb.OUT_FORMAT_OBJECT },
+        );
+        const raw = r.rows?.[0]?.VALUE;
+        if (raw !== undefined && raw !== null && raw !== '') {
+          const v = Number(raw);
+          if (!Number.isNaN(v)) return v;
+        }
+      } catch {
+        // No catalog grant; try the package instead.
+      }
       try {
         const r = await conn.execute<{ out: number }>(
           `DECLARE n BINARY_INTEGER; s VARCHAR2(4000); t BINARY_INTEGER;
@@ -231,20 +211,27 @@ export async function describeOracle(): Promise<OracleInfo> {
           { p: name, out: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } },
         );
         const v = (r.outBinds as { out: number } | undefined)?.out;
-        return v === undefined || v === null ? null : Math.round(Number(v) / 1024 / 1024);
+        const n = v === undefined || v === null ? NaN : Number(v);
+        return Number.isNaN(n) || n === 0 ? null : n;
       } catch {
         return null;
       }
     };
+
+    const asMb = (bytes: number | null): number | null =>
+      bytes === null ? null : Math.round(bytes / 1024 / 1024);
 
     return {
       version: conn.oracleServerVersionString,
       banner: banner.rows?.[0]?.BANNER ?? 'unknown',
       clientMode: oracledb.thin ? 'thin' : 'thick',
       models,
-      cpuCount,
-      pgaTargetMb: await param('pga_aggregate_target'),
-      pgaLimitMb: await param('pga_aggregate_limit'),
+      cpuCount: await param('cpu_count'),
+      // The container image applies INIT_PGA_SIZE only when it CREATES the database, so a
+      // recreate against an existing volume silently keeps the old value. Report what is in
+      // force rather than what the compose file asked for.
+      pgaTargetMb: asMb(await param('pga_aggregate_target')),
+      pgaLimitMb: asMb(await param('pga_aggregate_limit')),
     };
   });
 }
