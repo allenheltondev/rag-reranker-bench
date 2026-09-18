@@ -174,6 +174,9 @@ export async function describeOracle(): Promise<OracleInfo> {
     // The database's own CPU count, which on a container is its share rather than the host's.
     // An application reranker using every core while the database has a fraction of them is
     // not a comparison of where inference runs; it is a comparison of how much CPU each got.
+    //
+    // V$PARAMETER needs a catalog grant the benchmark user may not have, so fall back to
+    // DBMS_UTILITY, which any session can call.
     let cpuCount: number | null = null;
     try {
       const r = await conn.execute<{ VALUE: string }>(
@@ -182,9 +185,28 @@ export async function describeOracle(): Promise<OracleInfo> {
         { outFormat: oracledb.OUT_FORMAT_OBJECT },
       );
       const raw = r.rows?.[0]?.VALUE;
-      cpuCount = raw === undefined ? null : Number(raw);
+      if (raw !== undefined) cpuCount = Number(raw);
     } catch {
       cpuCount = null;
+    }
+    if (cpuCount === null || Number.isNaN(cpuCount)) {
+      try {
+        const r = await conn.execute<{ out: number }>(
+          `DECLARE
+             n BINARY_INTEGER;
+             s VARCHAR2(4000);
+             t BINARY_INTEGER;
+           BEGIN
+             t := DBMS_UTILITY.GET_PARAMETER_VALUE('cpu_count', n, s);
+             :out := n;
+           END;`,
+          { out: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } },
+        );
+        const value = (r.outBinds as { out: number } | undefined)?.out;
+        cpuCount = value === undefined ? null : Number(value);
+      } catch {
+        cpuCount = null;
+      }
     }
 
     return {

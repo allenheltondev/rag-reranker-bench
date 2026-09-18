@@ -46,6 +46,15 @@ END;
 /
 
 BEGIN
+  -- So the benchmark can record the database's own CPU count, which is what governs how much
+  -- of the machine in-database scoring can use. Reported in every run for provenance.
+  EXECUTE IMMEDIATE 'GRANT SELECT ON V_$PARAMETER TO ${BENCH_USER}';
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+/
+
+BEGIN
   -- Autonomous Database only: reading the ONNX files from Object Storage.
   EXECUTE IMMEDIATE 'GRANT EXECUTE ON DBMS_CLOUD TO ${BENCH_USER}';
 EXCEPTION

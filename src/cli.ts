@@ -345,9 +345,10 @@ async function cmdDoctor(): Promise<void> {
     await check('database CPUs', async () => {
       const info = await describeOracle();
       const host = cpus().length;
-      const app = process.env['APP_RERANK_THREADS'];
-      const matched = app ? Number(app) === info.cpuCount : info.cpuCount === host;
-      return `cpu_count=${info.cpuCount ?? 'unknown'} · host=${host} · app threads=${app ?? 'default (up to host)'}`
+      // An empty string in .env is not the same as unset to JavaScript, but it is to Oracle.
+      const configured = (process.env['APP_RERANK_THREADS'] ?? '').trim();
+      const matched = configured ? Number(configured) === info.cpuCount : info.cpuCount === host;
+      return `cpu_count=${info.cpuCount ?? 'unknown'} · host=${host} · app threads=${configured || `default (up to ${host})`}`
         + (matched ? ' · matched' : ' · NOT matched, so a latency comparison is partly a CPU comparison');
     });
     await check('chunk table', async () => `${await countChunks()} rows`);
