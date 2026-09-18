@@ -57,8 +57,9 @@ def main() -> None:
     parser.add_argument("--out", default="models/oracle/bge_reranker_base.onnx",
                         help="Where to write the augmented graph.")
     parser.add_argument("--quantize", action="store_true",
-                        help="Emit int8. Use only if the fp32 graph exceeds the database's model size limit, "
-                             "and then point APP_RERANK_DTYPE at the same quantization so both arms still match.")
+                        help="Quantize to int8. Quantizes the model BODY first and writes it back beside the "
+                             "application's export, so both arms run the same quantized weights; then augments "
+                             "that. Set APP_RERANK_DTYPE=q8 afterwards.")
     args = parser.parse_args()
 
     try:
@@ -116,6 +117,17 @@ def main() -> None:
     )
     tok_node = tok_graph.node[0]
     print(f"  {tok_node.op_type} from {vocab_file.name} + {config_file.name}")
+
+    if args.quantize:
+        # Quantize the BODY, and write it where the application reranker will pick it up as its
+        # q8 variant. Augmenting the quantized body then gives the database the same weights the
+        # application runs. Quantizing the merged graph instead would leave the two arms with
+        # separately-quantized models, which is exactly the thing this benchmark cannot have.
+        from onnxruntime.quantization import quantize_dynamic, QuantType
+        app_quantized = graph_path.parent / "model_quantized.onnx"
+        print(f"Quantizing the model body to int8 -> {app_quantized}")
+        quantize_dynamic(str(graph_path), str(app_quantized), weight_type=QuantType.QInt8)
+        graph_path = app_quantized
 
     body = onnx.load(str(graph_path))
     body_inputs = [i.name for i in body.graph.input]
@@ -270,15 +282,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.quantize:
-        print("Quantizing to int8 ...")
-        from onnxruntime.quantization import quantize_dynamic, QuantType
-        tmp = out_path.with_suffix(".fp32.onnx")
-        onnx.save(merged, str(tmp))
-        quantize_dynamic(str(tmp), str(out_path), weight_type=QuantType.QInt8)
-        os.remove(tmp)
-    else:
-        onnx.save(merged, str(out_path), save_as_external_data=False)
+    onnx.save(merged, str(out_path), save_as_external_data=False)
 
     size_mb = out_path.stat().st_size / 1024 / 1024
     print(f"\nWrote {out_path} ({size_mb:.0f} MB)")
@@ -318,6 +322,11 @@ def main() -> None:
         elif chunk:
             parts.append(sql_literal(chunk))
     packed_sql = " || ".join(parts)
+    quantize_note = ("""
+  2b. Set APP_RERANK_DTYPE=q8 in .env. The application arm must run the quantized weights this
+      just produced, or the two arms are no longer the same model."""
+                     if args.quantize else "")
+
     print(f"""
 Next steps:
 
@@ -327,6 +336,7 @@ Next steps:
 
      ORACLE_INDB_SCORE_EXPR=PREDICTION({os.environ.get('ORACLE_RERANK_MODEL', 'BGE_RERANKER')} USING {packed_sql} AS DATA)
 
+{quantize_note}
   3. npm run doctor
 
      Doctor scores an obviously matching pair against an irrelevant one. If that check
