@@ -112,9 +112,23 @@ async function cmdAugmentRerankModel(): Promise<void> {
   if (!existsSync(venvPython)) {
     throw new Error('Run `npm run export:app-model` first: this uses the environment it builds.');
   }
-  log('Installing the graph-surgery dependency (onnxruntime-extensions) ...');
-  const install = spawnSync(venvPython, ['-m', 'pip', 'install', '--quiet', 'onnxruntime-extensions'], { stdio: 'inherit' });
-  if (install.status !== 0) throw new Error('Could not install onnxruntime-extensions.');
+  // Pinned: 0.15.2 publishes no Windows wheels at all, so an unpinned install fails there
+  // with "no matching distribution" while working fine on Linux. 0.15.0 ships win_amd64
+  // wheels for CPython 3.10-3.13 and is API-identical for the tokenizer graph generation
+  // this uses.
+  log('Installing the graph-surgery dependency (onnxruntime-extensions==0.15.0) ...');
+  const install = spawnSync(
+    venvPython,
+    ['-m', 'pip', 'install', '--quiet', 'onnxruntime-extensions==0.15.0'],
+    { stdio: 'inherit' },
+  );
+  if (install.status !== 0) {
+    throw new Error(
+      'Could not install onnxruntime-extensions==0.15.0.\n'
+      + 'It ships wheels for CPython 3.10-3.13 on Windows; if your Python is outside that range, '
+      + 'delete .venv-export, install a supported Python, and run `npm run export:app-model` again.',
+    );
+  }
 
   const passthrough = args.slice(1);
   const res = spawnSync(venvPython, [resolve('scripts/augment_reranker_onnx.py'), ...passthrough], { stdio: 'inherit' });
