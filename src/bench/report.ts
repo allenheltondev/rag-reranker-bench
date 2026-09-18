@@ -55,6 +55,8 @@ export function summariseStage(
   queries: readonly Query[],
   topK: number,
   chunkById?: Map<string, Chunk>,
+  cutoffs: readonly number[] = [3, 5, topK],
+  seed = 1,
 ): StageSummary {
   const totals = run.iterations.map((i) => i.timings.total);
   const perQueryResults = resultsByQuery(run);
@@ -94,7 +96,7 @@ export function summariseStage(
     worstQueryCv,
     sigmaMs: median(perQuerySigma),
     bytesPerQuery: mean(run.iterations.map((i) => i.bytesFromDb)),
-    quality: summariseQuality(perQueryResults, queries, topK),
+    quality: summariseQuality(perQueryResults, queries, topK, cutoffs, seed),
     attribution: run.iterations[0]?.attribution ?? 'split',
     violations,
   };
@@ -294,7 +296,8 @@ export function renderMarkdown(
 ): string {
   const k = run.config.topK;
   const chunkById = chunks ? new Map(chunks.map((c) => [c.id, c])) : undefined;
-  const summaries = run.stages.map((s) => summariseStage(s, queries, k, chunkById));
+  const cutoffs = [...new Set([3, 5, k])].sort((a, b) => a - b);
+  const summaries = run.stages.map((s) => summariseStage(s, queries, k, chunkById, cutoffs, run.config.seed));
   const out: string[] = [];
 
   out.push('# Reranker placement benchmark');
@@ -352,13 +355,33 @@ export function renderMarkdown(
     out.push('');
   }
 
+  if (chunks && chunks.length > 0) {
+    const lengths = chunks.map((c) => c.title.length + 2 + c.content.length).sort((a, b) => a - b);
+    const at = (p: number): number => lengths[Math.min(lengths.length - 1, Math.floor((p / 100) * lengths.length))]!;
+    out.push('## Corpus shape');
+    out.push('');
+    out.push(`${chunks.length} chunks. Scored text per candidate: median ${at(50)} characters, p90 ${at(90)}, max ${lengths[lengths.length - 1]}.`);
+    out.push(`That is roughly ${Math.round(at(50) / 4)} tokens at the median against the model's 512-token window.`);
+    out.push('');
+    out.push('This bounds two numbers below. Cross-encoder cost grows with sequence length, so a corpus');
+    out.push('of longer passages would score slower than this one; and bytes leaving the database scale');
+    out.push('directly with it. Both figures are therefore conservative for a corpus of full-length');
+    out.push('documentation chunks.');
+    out.push('');
+  }
+
   out.push('## Latency and quality by stage');
   out.push('');
-  out.push(`| Stage | p50 (ms) | p95 (ms) | p99 (ms) | nDCG@${k} | Recall@${k} | MRR@${k} | Bytes from DB |`);
-  out.push('|---|---:|---:|---:|---:|---:|---:|---:|');
+  out.push(`| Stage | p50 (ms) | p95 (ms) | p99 (ms) | nDCG@${k} | nDCG 95% CI | Recall@${k} | MRR@${k} | Bytes from DB |`);
+  out.push('|---|---:|---:|---:|---:|---|---:|---:|---:|');
   for (const s of summaries) {
-    out.push(`| ${s.stage.label} | ${fmt(s.p50)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.quality.ndcg, 3)} | ${fmt(s.quality.recall, 3)} | ${fmt(s.quality.mrr, 3)} | ${fmtBytes(s.bytesPerQuery)} |`);
+    const ci = `[${fmt(s.quality.ndcgCI.lower, 3)}, ${fmt(s.quality.ndcgCI.upper, 3)}]`;
+    out.push(`| ${s.stage.label} | ${fmt(s.p50)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.quality.ndcg, 3)} | ${ci} | ${fmt(s.quality.recall, 3)} | ${fmt(s.quality.mrr, 3)} | ${fmtBytes(s.bytesPerQuery)} |`);
   }
+  out.push('');
+  out.push(`The nDCG interval comes from resampling the ${queries.length}-query set, not from repeating the run:`);
+  out.push('a deterministic pipeline returns the same ordering every iteration, so more iterations cannot');
+  out.push('make a quality number more certain. More queries can.');
   out.push('');
 
   if (chunkById) {
@@ -390,15 +413,35 @@ export function renderMarkdown(
     out.push('treatment. "Scoring" is the median of the per-observation differences, with a 95%');
     out.push('bootstrap interval. Quality deltas are against the no-rerank baseline at top-K.');
     out.push('');
-    out.push(`| Retrieval | N | Where | Control p50 (ms) | Treatment p50 (ms) | Scoring, median Δ (ms) | 95% CI | Pairs | nDCG@${k} | Δ nDCG |`);
-    out.push('|---|---:|---|---:|---:|---:|---|---:|---:|---:|');
+    out.push(`| Retrieval | N | Where | Scoring, median Δ (ms) | 95% CI | nDCG@${k} | Δ nDCG vs no rerank | Δ nDCG 95% CI |`);
+    out.push('|---|---:|---|---:|---|---:|---:|---|');
     for (const c of costs) {
       const treat = summaries.find((x) => x.stage.id === c.treatmentId)!;
       const baseline = summaries.find((b) => b.stage.role === 'baseline' && b.stage.retrieval === c.retrieval);
-      const deltaNdcg = baseline ? treat.quality.ndcg - baseline.quality.ndcg : NaN;
       const where = c.reranker === 'in-db' ? 'in database' : 'application';
-      out.push(`| ${c.retrieval} | ${c.candidateCount} | ${where} | ${fmt(c.controlP50)} | ${fmt(c.treatmentP50)} | **${fmt(c.medianDelta)}** | [${fmt(c.ci.lower)}, ${fmt(c.ci.upper)}] | ${c.pairs} | ${fmt(treat.quality.ndcg, 3)} | ${deltaNdcg >= 0 ? '+' : ''}${fmt(deltaNdcg, 3)} |`);
+      let deltaCell = 'n/a';
+      let deltaCI = 'n/a';
+      if (baseline) {
+        // Paired by query: the same query's nDCG with and without scoring. Resampling the
+        // query set then says whether the gain survives a different choice of queries.
+        const diffs: number[] = [];
+        for (const [queryId, value] of Object.entries(treat.quality.perQuery)) {
+          const before = baseline.quality.perQuery[queryId];
+          if (before !== undefined) diffs.push(value - before);
+        }
+        if (diffs.length > 0) {
+          const d = mean(diffs);
+          const ci = bootstrapCI(diffs, mean, 2000, run.config.seed);
+          const crossesZero = ci.lower <= 0 && ci.upper >= 0;
+          deltaCell = `${d >= 0 ? '+' : ''}${fmt(d, 3)}`;
+          deltaCI = `[${fmt(ci.lower, 3)}, ${fmt(ci.upper, 3)}]${crossesZero ? ' ⚠' : ''}`;
+        }
+      }
+      out.push(`| ${c.retrieval} | ${c.candidateCount} | ${where} | **${fmt(c.medianDelta)}** | [${fmt(c.ci.lower)}, ${fmt(c.ci.upper)}] | ${fmt(treat.quality.ndcg, 3)} | ${deltaCell} | ${deltaCI} |`);
     }
+    out.push('');
+    out.push('⚠ on a quality interval means it spans zero: on this query set, that gain is not');
+    out.push('distinguishable from no gain, however much latency it cost.');
     out.push('');
 
     const checks = costs.filter((c) => c.directMedian !== undefined);
@@ -420,6 +463,22 @@ export function renderMarkdown(
       }
       out.push('');
     }
+  }
+
+  if (cutoffs.length > 1) {
+    out.push('## Quality against the context budget');
+    out.push('');
+    out.push('The same orderings, scored at several cutoffs. Reranking changes what reaches the top of');
+    out.push('the list, so the tighter the budget, the more of its effect survives truncation. A gain');
+    out.push('that only appears at a generous K is a gain you will not see if you can afford few passages.');
+    out.push('');
+    out.push(`| Stage | ${cutoffs.map((c) => `nDCG@${c}`).join(' | ')} |`);
+    out.push(`|---|${cutoffs.map(() => '---:').join('|')}|`);
+    for (const s of summaries) {
+      if (s.stage.role === 'control') continue;
+      out.push(`| ${s.stage.label} | ${cutoffs.map((c) => fmt(s.quality.ndcgByK[c] ?? NaN, 3)).join(' | ')} |`);
+    }
+    out.push('');
   }
 
   const transfers = transferCosts(run);

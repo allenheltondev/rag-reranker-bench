@@ -122,7 +122,18 @@ export interface QualitySummary {
   ndcg: number;
   recall: number;
   mrr: number;
-  /** Per-query nDCG, keyed by query id, for the per-query breakdown in the report. */
+  /**
+   * Confidence interval on the mean nDCG, from resampling the QUERY SET.
+   *
+   * A deterministic pipeline returns the same ordering every iteration, so repeating the run
+   * does not make a quality number more certain. The uncertainty is which queries you happened
+   * to choose, and on a set this size that uncertainty is large. Reporting nDCG without it
+   * invites reading a difference that a different sixteen queries would not reproduce.
+   */
+  ndcgCI: Interval;
+  /** nDCG at several context budgets, keyed by cutoff. */
+  ndcgByK: Record<number, number>;
+  /** Per-query nDCG at the primary cutoff, for per-query breakdowns and paired comparisons. */
   perQuery: Record<string, number>;
 }
 
@@ -135,11 +146,14 @@ export function summariseQuality(
   resultsByQuery: Map<string, RankedResult[]>,
   queries: readonly Query[],
   k: number,
+  cutoffs: readonly number[] = [3, 5, 10],
+  seed = 1,
 ): QualitySummary {
   const ndcgs: number[] = [];
   const recalls: number[] = [];
   const mrrs: number[] = [];
   const perQuery: Record<string, number> = {};
+  const byK = new Map<number, number[]>(cutoffs.map((c) => [c, []]));
 
   for (const q of queries) {
     const results = resultsByQuery.get(q.id);
@@ -150,9 +164,24 @@ export function summariseQuality(
     if (!Number.isNaN(n)) { ndcgs.push(n); perQuery[q.id] = n; }
     if (!Number.isNaN(r)) recalls.push(r);
     if (!Number.isNaN(m)) mrrs.push(m);
+    for (const cutoff of cutoffs) {
+      const v = ndcgAt(results, q.judgments, cutoff);
+      if (!Number.isNaN(v)) byK.get(cutoff)!.push(v);
+    }
   }
 
-  return { ndcg: mean(ndcgs), recall: mean(recalls), mrr: mean(mrrs), perQuery };
+  const ndcgByK: Record<number, number> = {};
+  for (const [cutoff, values] of byK) ndcgByK[cutoff] = mean(values);
+
+  return {
+    ndcg: mean(ndcgs),
+    recall: mean(recalls),
+    mrr: mean(mrrs),
+    // Resampling queries, not iterations: see the note on ndcgCI.
+    ndcgCI: bootstrapCI(ndcgs, mean, 2000, seed),
+    ndcgByK,
+    perQuery,
+  };
 }
 
 /**
