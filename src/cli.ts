@@ -103,7 +103,7 @@ async function cmdLoad(): Promise<void> {
  * Augment the exported cross-encoder so the database can score raw text with it.
  *
  * Runs in the virtualenv `npm run export:app-model` already built, because it needs the same
- * onnx and transformers versions that produced the graph it is modifying.
+ * onnx version that produced the graph it is modifying.
  */
 async function cmdAugmentRerankModel(): Promise<void> {
   const { spawnSync } = await import('node:child_process');
@@ -129,7 +129,7 @@ async function cmdAugmentRerankModel(): Promise<void> {
     if (venv.status !== 0) throw new Error('Could not create the augmentation environment.');
   }
 
-  log('Installing onnx, onnxruntime, transformers and onnxruntime-extensions==0.15.0 ...');
+  log('Installing onnx, onnxruntime, tokenizers and onnxruntime-extensions==0.15.0 ...');
   const install = spawnSync(
     venvPython,
     ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'],
@@ -139,8 +139,10 @@ async function cmdAugmentRerankModel(): Promise<void> {
   // Pinned: 0.15.2 publishes no Windows wheels at all, and 0.15.0's top out at CPython 3.13.
   const deps = spawnSync(
     venvPython,
-    ['-m', 'pip', 'install', '--quiet', 'onnx', 'onnxruntime', 'transformers', 'tokenizers',
-      'sentencepiece', 'protobuf', 'onnxruntime-extensions==0.15.0'],
+    // Deliberately not `transformers`: this needs only the tokenizer, and that library costs
+    // tens of seconds of import time on every run while scanning its model registry.
+    ['-m', 'pip', 'install', '--quiet', 'onnx', 'onnxruntime', 'tokenizers',
+      'onnxruntime-extensions==0.15.0'],
     { stdio: 'inherit' },
   );
   if (deps.status !== 0) {

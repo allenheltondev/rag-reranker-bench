@@ -66,7 +66,10 @@ def main() -> None:
         import onnx
         from onnx import TensorProto, helper
         import numpy as np
-        from transformers import AutoTokenizer
+        # `tokenizers` rather than `transformers`: this needs the tokenizer itself, and the
+        # larger library adds tens of seconds of import time scanning its model registry for
+        # no benefit here.
+        from tokenizers import Tokenizer
         import onnxruntime as ort
         import onnxruntime_extensions as ox
     except ImportError as exc:
@@ -79,18 +82,36 @@ def main() -> None:
 
     print(f"Loading tokenizer from {model_dir}")
     print(f"  files present: {sorted(p.name for p in model_dir.iterdir() if p.is_file())}")
-    # Prefer the fast tokenizer: it carries tokenizer.json, which is the form the converter can
-    # embed directly without needing the original sentencepiece model beside it.
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, use_fast=True)
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
-    print(f"  {type(tokenizer).__name__}")
+    vocab_file = model_dir / "tokenizer.json"
+    config_file = model_dir / "tokenizer_config.json"
+    for required in (vocab_file, config_file):
+        if not required.exists():
+            fail(f"{required} not found. Re-run `npm run export:app-model`.")
+
+    tokenizer = Tokenizer.from_file(str(vocab_file))
+    tok_config = json.loads(config_file.read_text(encoding="utf-8"))
+    print(f"  {tok_config.get('tokenizer_class', 'unknown class')}, vocabulary of {tokenizer.get_vocab_size()}")
+
+    def special(*names: str) -> "tuple[str | None, int | None]":
+        """Resolve a special token from the tokenizer config, by preference order."""
+        for key in names:
+            value = tok_config.get(key)
+            if isinstance(value, dict):
+                value = value.get("content")
+            if isinstance(value, str):
+                token_id = tokenizer.token_to_id(value)
+                if token_id is not None:
+                    return value, token_id
+        return None, None
+
+    bos_token, bos_id = special("bos_token", "cls_token")
+    eos_token, eos_id = special("eos_token", "sep_token")
+    sep_token, _ = special("sep_token", "eos_token")
 
     # ---------------------------------------------------------------- reference encoding
     # What the model actually expects for a pair. Everything below is judged against this.
     probe_q, probe_d = "what colour is the sky", "The sky is blue."
-    native = list(tokenizer(probe_q, text_pair=probe_d)["input_ids"])
+    native = list(tokenizer.encode(probe_q, probe_d).ids)
     print(f"  the model's own pair encoding is {len(native)} tokens: {native[:8]}...")
 
     # ---------------------------------------------------------------- tokenizer graph
@@ -103,12 +124,6 @@ def main() -> None:
         from onnxruntime_extensions._cuops import SingleOpGraph
     except ImportError as exc:
         fail(f"onnxruntime-extensions is missing its graph builder: {exc}")
-
-    vocab_file = model_dir / "tokenizer.json"
-    config_file = model_dir / "tokenizer_config.json"
-    for required in (vocab_file, config_file):
-        if not required.exists():
-            fail(f"{required} not found. Re-run `npm run export:app-model`.")
 
     tok_graph = SingleOpGraph.build_graph(
         "HfJsonTokenizer",
@@ -147,8 +162,6 @@ def main() -> None:
     # constants rather than as text, because a special token written into the text makes the
     # metaspace pre-tokenizer emit a stray separator token ahead of it. The ids are exact and
     # position-independent; the text route is neither.
-    bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.cls_token_id
-    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else tokenizer.sep_token_id
     initializers = []
     wrapped = ["__ids64"]
     if bos_id is not None:
@@ -210,7 +223,7 @@ def main() -> None:
     # Whitespace around the separator matters: the metaspace pre-tokenizer marks a word start,
     # so a passage that begins immediately after a special token tokenizes differently from the
     # same passage tokenized on its own. Enumerate the placements rather than reason about it.
-    sep = tokenizer.sep_token or tokenizer.eos_token or ""
+    sep = sep_token or eos_token or ""
     candidates = []
     for count in (2, 1):
         joiner = sep * count
