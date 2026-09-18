@@ -338,6 +338,17 @@ async function cmdDoctor(): Promise<void> {
       const info = await describeOracle();
       return `${info.version} (${info.clientMode} client)`;
     });
+    // cpu_count, not the container's nproc: an edition cap or an instance setting can hold it
+    // below what the OS exposes, and it governs how much of the machine in-database scoring
+    // can actually use.
+    await check('database CPUs', async () => {
+      const info = await describeOracle();
+      const host = cpus().length;
+      const app = process.env['APP_RERANK_THREADS'];
+      const matched = app ? Number(app) === info.cpuCount : info.cpuCount === host;
+      return `cpu_count=${info.cpuCount ?? 'unknown'} · host=${host} · app threads=${app ?? 'default (up to host)'}`
+        + (matched ? ' · matched' : ' · NOT matched, so a latency comparison is partly a CPU comparison');
+    });
     await check('chunk table', async () => `${await countChunks()} rows`);
     await check('embedding model loaded', async () => {
       const info = await describeOracle();
