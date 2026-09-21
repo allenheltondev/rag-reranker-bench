@@ -562,24 +562,6 @@ async function cmdExplain(): Promise<void> {
       rows = res.rows ?? [];
     }
     log(`Returned ${rows.length} row(s).`);
-    // Which candidates the statement scored, and how much text each one carried. Sequence
-    // length drives cross-encoder cost, so two retrieval arms scoring the same count of
-    // candidates can still be doing different amounts of work. The control's SCORE is the
-    // length of the scored text, because that is what the control expression computes.
-    const lengths = await conn.execute<{ ID: string; LEN: number }>(
-      `SELECT ID, LENGTH(TITLE) + LENGTH(CONTENT) AS LEN FROM ${oracle.schemaPrefix.toUpperCase()}_CHUNKS`
-      + ` WHERE ID IN (${rows.map((_, i) => `:id${i}`).join(', ') || 'NULL'})`,
-      Object.fromEntries(rows.map((r, i) => [`id${i}`, r.ID])),
-      { outFormat: oracledb.OUT_FORMAT_OBJECT },
-    ).catch(() => ({ rows: [] as { ID: string; LEN: number }[] }));
-    const lenById = new Map((lengths.rows ?? []).map((r) => [r.ID, r.LEN]));
-    const chars = rows.map((r) => lenById.get(r.ID) ?? 0);
-    if (chars.length > 0) {
-      const total = chars.reduce((a, b) => a + b, 0);
-      log(`Scored text: ${total} characters over ${rows.length} candidate(s),`
-        + ` ${Math.round(total / rows.length)} on average.`);
-      log(rows.map((r, i) => `  ${r.ID} (${chars[i]} chars)`).join('\n'));
-    }
     log(`Executions: ${runs.map((m) => `${m.toFixed(0)} ms`).join(' → ')}`);
     if (warmup > 0) {
       log(`The plan below is the last of these. The first is cold: it loads the ONNX models into`);
@@ -608,6 +590,27 @@ async function cmdExplain(): Promise<void> {
     }
     for (const line of plan) log(line);
     log('');
+    // Deliberately after the plan is read: DISPLAY_CURSOR with no SQL_ID describes the
+    // previous statement on this session, so any query run before it becomes the one
+    // described. Running this lookup first made every plan above the lookup's own.
+    // Which candidates the statement scored, and how much text each one carried. Sequence
+    // length drives cross-encoder cost, so two retrieval arms scoring the same count of
+    // candidates can still be doing different amounts of work. The control's SCORE is the
+    // length of the scored text, because that is what the control expression computes.
+    const lengths = await conn.execute<{ ID: string; LEN: number }>(
+      `SELECT ID, LENGTH(TITLE) + LENGTH(CONTENT) AS LEN FROM ${oracle.schemaPrefix.toUpperCase()}_CHUNKS`
+      + ` WHERE ID IN (${rows.map((_, i) => `:id${i}`).join(', ') || 'NULL'})`,
+      Object.fromEntries(rows.map((r, i) => [`id${i}`, r.ID])),
+      { outFormat: oracledb.OUT_FORMAT_OBJECT },
+    ).catch(() => ({ rows: [] as { ID: string; LEN: number }[] }));
+    const lenById = new Map((lengths.rows ?? []).map((r) => [r.ID, r.LEN]));
+    const chars = rows.map((r) => lenById.get(r.ID) ?? 0);
+    if (chars.length > 0) {
+      const total = chars.reduce((a, b) => a + b, 0);
+      log(`Scored text: ${total} characters over ${rows.length} candidate(s),`
+        + ` ${Math.round(total / rows.length)} on average.`);
+      log(rows.map((r, i) => `  ${r.ID} (${chars[i]} chars)`).join('\n'));
+    }
     log(`A-Rows is what each step really produced. Every step should show ${n}; more would mean`);
     log('the cross-encoder scored rows the candidate limit then discarded.');
     log('');
