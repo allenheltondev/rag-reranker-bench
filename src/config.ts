@@ -174,7 +174,17 @@ export function runConfigFromEnv(overrides: Partial<RunConfig> = {}): RunConfig 
 export function buildStages(cfg: RunConfig): Stage[] {
   const stages: Stage[] = [];
   const rerankers = cfg.rerankers.filter((r) => r !== 'none');
+  // Reranking fewer candidates than you return is not a pipeline, so shallow depths are
+  // dropped. Dropping them silently is how a probe at N=1 comes back with no such stage and
+  // no explanation, so say which ones went and what to do about it.
   const depths = cfg.candidateCounts.filter((n) => n >= cfg.topK);
+  const dropped = cfg.candidateCounts.filter((n) => n < cfg.topK);
+  if (dropped.length > 0) {
+    process.stderr.write(
+      `Note: candidate depth(s) ${dropped.join(', ')} are below top-K ${cfg.topK} and were skipped.\n`
+      + `      Lower --top-k to measure them.\n`,
+    );
+  }
 
   for (const retrieval of cfg.retrievals) {
     if (cfg.rerankers.includes('none')) {

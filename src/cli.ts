@@ -1,4 +1,5 @@
 import { cpus } from 'node:os';
+import oracledb from 'oracledb';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
@@ -6,7 +7,9 @@ import { generateCorpus } from './corpus/generate.js';
 import { assertIdentifier, closePool, describeOracle, hintFor, withConnection } from './db/oracle.js';
 import { countChunks, loadChunks, runScript } from './db/load.js';
 import { AppReranker } from './rerank/app.js';
-import { describeAttributeMismatch, scoreExpr } from './rerank/indb.js';
+import { InDbReranker, describeAttributeMismatch, scoreExpr } from './rerank/indb.js';
+import { bindsFor } from './retrieval/candidates.js';
+import { usedBinds } from './db/sql.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
 import { renderInspection } from './bench/inspect.js';
@@ -517,6 +520,68 @@ async function cmdInspect(): Promise<void> {
   log(renderInspection(run));
 }
 
+async function cmdExplain(): Promise<void> {
+  const cfg = runConfigFromEnv(overridesFromFlags());
+  const retrieval = (opt('retrieval') ?? 'vector') as 'vector' | 'lexical' | 'hybrid-rrf';
+  if (!['vector', 'lexical', 'hybrid-rrf'].includes(retrieval)) {
+    throw new Error(`--retrieval takes vector, lexical or hybrid-rrf, got ${JSON.stringify(retrieval)}.`);
+  }
+  const n = Number(opt('candidates') ?? 10);
+  const topK = Number(opt('top-k') ?? Math.min(cfg.topK, n));
+  const control = flag('control');
+  const { queries } = readCorpus();
+  const wanted = opt('query');
+  const query = wanted ? queries.find((q) => q.id === wanted) : queries[0];
+  if (!query) throw new Error(`No query ${JSON.stringify(wanted)} in the corpus.`);
+
+  const sql = new InDbReranker(cfg.rrfK).sqlFor(retrieval, control);
+  const binds = usedBinds(sql, bindsFor(query, n, cfg.rrfK, topK));
+
+  log(`${retrieval} · ${control ? 'control' : 'rerank'} · N=${n} · top-K=${topK} · ${query.id}`);
+  log('');
+
+  await withConnection(async (conn) => {
+    // Row-source statistics are per session and off by default; without them the plan comes
+    // back with estimates only, and estimates are exactly what is in question here.
+    await conn.execute('ALTER SESSION SET STATISTICS_LEVEL = ALL');
+    const started = performance.now();
+    const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
+      outFormat: oracledb.OUT_FORMAT_OBJECT,
+    });
+    const ms = performance.now() - started;
+    const rows = res.rows ?? [];
+    log(`Returned ${rows.length} row(s) in ${ms.toFixed(1)} ms.`);
+    log('');
+
+    // DISPLAY_CURSOR with no sql_id describes the previous statement on this session, so this
+    // has to run on the same connection as the statement above.
+    let plan: string[] = [];
+    try {
+      const out = await conn.execute<{ PLAN_TABLE_OUTPUT: string }>(
+        `SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST +PREDICATE'))`,
+        [],
+        { outFormat: oracledb.OUT_FORMAT_OBJECT },
+      );
+      plan = (out.rows ?? []).map((r) => r.PLAN_TABLE_OUTPUT);
+    } catch (err) {
+      log(`Could not read the plan: ${(err as Error).message}`);
+      log('Re-run `npm run bootstrap` to pick up the V$ grants this needs, then try again.');
+      return;
+    }
+    if (plan.length === 0 || plan.join('').includes('cannot be displayed')) {
+      log('The plan came back empty. The benchmark user is probably missing SELECT on V_$SQL_PLAN,');
+      log('V_$SQL_PLAN_STATISTICS_ALL, V_$SQL and V_$SESSION. Re-run `npm run bootstrap` to grant them.');
+    }
+    for (const line of plan) log(line);
+    log('');
+    log('Read the A-Rows column. It is what each step really produced, against E-Rows estimated.');
+    log(`The step projecting the scoring expression should show A-Rows = ${n}. A larger number`);
+    log('means the cross-encoder scored rows that the candidate limit then discarded, and the');
+    log('cost of those rows is in every in-database timing this benchmark reports.');
+  });
+  await closePool().catch(() => {});
+}
+
 function cmdHelp(): void {
   log(`rag-reranker-bench
 
@@ -533,6 +598,8 @@ function cmdHelp(): void {
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run
   npm run inspect -- --run <raw.json> Per-iteration forensics: candidates scored, outliers
+  npm run explain -- --retrieval vector --candidates 10
+                                      Execution plan of one in-database rerank, with real row counts
 
 Flags for bench:
   --backend oracle|fixture   Where retrieval and reranking run (default: oracle)
@@ -566,6 +633,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   bench: cmdBench,
   report: cmdReport,
   inspect: cmdInspect,
+  explain: cmdExplain,
   help: cmdHelp,
 };
 

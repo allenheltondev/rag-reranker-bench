@@ -55,6 +55,21 @@ END;
 /
 
 BEGIN
+  -- So `npm run explain` can read the execution plan of its own last statement, with the row
+  -- counts each step really produced. Without these the benchmark can measure that a statement
+  -- is slow but not what it did; with them it can say how many rows the cross-encoder scored,
+  -- which is not the same as how many rows came back. Read-only, and the benchmark runs
+  -- without them.
+  EXECUTE IMMEDIATE 'GRANT SELECT ON V_$SQL_PLAN TO ${BENCH_USER}';
+  EXECUTE IMMEDIATE 'GRANT SELECT ON V_$SQL_PLAN_STATISTICS_ALL TO ${BENCH_USER}';
+  EXECUTE IMMEDIATE 'GRANT SELECT ON V_$SQL TO ${BENCH_USER}';
+  EXECUTE IMMEDIATE 'GRANT SELECT ON V_$SESSION TO ${BENCH_USER}';
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+/
+
+BEGIN
   -- Autonomous Database only: reading the ONNX files from Object Storage.
   EXECUTE IMMEDIATE 'GRANT EXECUTE ON DBMS_CLOUD TO ${BENCH_USER}';
 EXCEPTION

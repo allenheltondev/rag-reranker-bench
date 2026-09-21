@@ -23,7 +23,8 @@
     "doctor": "tsx src/cli.ts doctor",
     "bench": "tsx src/cli.ts bench",
     "report": "tsx src/cli.ts report",
-    "inspect": "tsx src/cli.ts inspect"
+    "inspect": "tsx src/cli.ts inspect",
+    "explain": "tsx src/cli.ts explain"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",
