@@ -552,7 +552,7 @@ async function cmdExplain(): Promise<void> {
     // touch the model first, which is exactly the step under examination. The benchmark warms
     // up before measuring; so does this. ALLSTATS LAST reports the final execution only.
     const runs: number[] = [];
-    let rows: unknown[] = [];
+    let rows: { ID: string; SCORE: number }[] = [];
     for (let i = 0; i <= warmup; i++) {
       const started = performance.now();
       const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
@@ -562,6 +562,24 @@ async function cmdExplain(): Promise<void> {
       rows = res.rows ?? [];
     }
     log(`Returned ${rows.length} row(s).`);
+    // Which candidates the statement scored, and how much text each one carried. Sequence
+    // length drives cross-encoder cost, so two retrieval arms scoring the same count of
+    // candidates can still be doing different amounts of work. The control's SCORE is the
+    // length of the scored text, because that is what the control expression computes.
+    const lengths = await conn.execute<{ ID: string; LEN: number }>(
+      `SELECT ID, LENGTH(TITLE) + LENGTH(CONTENT) AS LEN FROM ${oracle.schemaPrefix.toUpperCase()}_CHUNKS`
+      + ` WHERE ID IN (${rows.map((_, i) => `:id${i}`).join(', ') || 'NULL'})`,
+      Object.fromEntries(rows.map((r, i) => [`id${i}`, r.ID])),
+      { outFormat: oracledb.OUT_FORMAT_OBJECT },
+    ).catch(() => ({ rows: [] as { ID: string; LEN: number }[] }));
+    const lenById = new Map((lengths.rows ?? []).map((r) => [r.ID, r.LEN]));
+    const chars = rows.map((r) => lenById.get(r.ID) ?? 0);
+    if (chars.length > 0) {
+      const total = chars.reduce((a, b) => a + b, 0);
+      log(`Scored text: ${total} characters over ${rows.length} candidate(s),`
+        + ` ${Math.round(total / rows.length)} on average.`);
+      log(rows.map((r, i) => `  ${r.ID} (${chars[i]} chars)`).join('\n'));
+    }
     log(`Executions: ${runs.map((m) => `${m.toFixed(0)} ms`).join(' → ')}`);
     if (warmup > 0) {
       log(`The plan below is the last of these. The first is cold: it loads the ONNX models into`);
