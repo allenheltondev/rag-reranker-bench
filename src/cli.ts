@@ -529,6 +529,7 @@ async function cmdExplain(): Promise<void> {
   const n = Number(opt('candidates') ?? 10);
   const topK = Number(opt('top-k') ?? Math.min(cfg.topK, n));
   const control = flag('control');
+  const warmup = Number(opt('warmup') ?? 3);
   const { queries } = readCorpus();
   const wanted = opt('query');
   const query = wanted ? queries.find((q) => q.id === wanted) : queries[0];
@@ -537,20 +538,35 @@ async function cmdExplain(): Promise<void> {
   const sql = new InDbReranker(cfg.rrfK).sqlFor(retrieval, control);
   const binds = usedBinds(sql, bindsFor(query, n, cfg.rrfK, topK));
 
-  log(`${retrieval} · ${control ? 'control' : 'rerank'} · N=${n} · top-K=${topK} · ${query.id}`);
+  log(`${retrieval} · ${control ? 'control' : 'rerank'} · N=${n} · top-K=${topK} · ${query.id} · ${warmup} warmup`);
   log('');
 
   await withConnection(async (conn) => {
     // Row-source statistics are per session and off by default; without them the plan comes
     // back with estimates only, and estimates are exactly what is in question here.
     await conn.execute('ALTER SESSION SET STATISTICS_LEVEL = ALL');
-    const started = performance.now();
-    const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
-      outFormat: oracledb.OUT_FORMAT_OBJECT,
-    });
-    const ms = performance.now() - started;
-    const rows = res.rows ?? [];
-    log(`Returned ${rows.length} row(s) in ${ms.toFixed(1)} ms.`);
+
+    // Every invocation of this command gets a fresh session, and the first execution of a
+    // statement in one loads the ONNX models it references into that session and hard-parses.
+    // Left cold, a plan attributes seconds of model loading to whichever step happened to
+    // touch the model first, which is exactly the step under examination. The benchmark warms
+    // up before measuring; so does this. ALLSTATS LAST reports the final execution only.
+    const runs: number[] = [];
+    let rows: unknown[] = [];
+    for (let i = 0; i <= warmup; i++) {
+      const started = performance.now();
+      const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
+        outFormat: oracledb.OUT_FORMAT_OBJECT,
+      });
+      runs.push(performance.now() - started);
+      rows = res.rows ?? [];
+    }
+    log(`Returned ${rows.length} row(s).`);
+    log(`Executions: ${runs.map((m) => `${m.toFixed(0)} ms`).join(' → ')}`);
+    if (warmup > 0) {
+      log(`The plan below is the last of these. The first is cold: it loads the ONNX models into`);
+      log(`the session. Only the last one is comparable with the benchmark's warm figures.`);
+    }
     log('');
 
     // DISPLAY_CURSOR with no sql_id describes the previous statement on this session, so this
@@ -574,10 +590,12 @@ async function cmdExplain(): Promise<void> {
     }
     for (const line of plan) log(line);
     log('');
-    log('Read the A-Rows column. It is what each step really produced, against E-Rows estimated.');
-    log(`The step projecting the scoring expression should show A-Rows = ${n}. A larger number`);
-    log('means the cross-encoder scored rows that the candidate limit then discarded, and the');
-    log('cost of those rows is in every in-database timing this benchmark reports.');
+    log(`A-Rows is what each step really produced. Every step should show ${n}; more would mean`);
+    log('the cross-encoder scored rows the candidate limit then discarded.');
+    log('');
+    log('A-Time is cumulative: a step includes its children. Subtract a step from its child to');
+    log('get what that step itself cost. The scoring expression is projected by the outermost');
+    log('SORT ORDER BY STOPKEY, so that step minus the one below it is the cost of scoring.');
   });
   await closePool().catch(() => {});
 }
