@@ -9,6 +9,7 @@ import { AppReranker } from './rerank/app.js';
 import { describeAttributeMismatch, scoreExpr } from './rerank/indb.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
+import { renderInspection } from './bench/inspect.js';
 import { exportAppModel } from './tools/export-app-model.js';
 import { readZip } from './tools/unzip.js';
 import type { BenchRun, Chunk, Query, RunConfig } from './types.js';
@@ -492,6 +493,7 @@ async function cmdBench(): Promise<void> {
   writeFileSync(resolve(dir, 'summary.md'), renderMarkdown(run, queries, parity, chunks));
   writeFileSync(resolve(dir, 'summary.csv'), `${renderCsv(run, queries, chunks)}\n`);
   writeFileSync(resolve(dir, 'scoring-costs.csv'), `${renderCostsCsv(run)}\n`);
+  writeFileSync(resolve(dir, 'inspection.md'), renderInspection(run));
 
   log('');
   log(`Results written to ${dir}`);
@@ -506,6 +508,13 @@ async function cmdReport(): Promise<void> {
   const run = JSON.parse(readFileSync(resolve(file), 'utf8')) as BenchRun & { parity?: never };
   const { chunks, queries } = readCorpus();
   log(renderMarkdown(run, queries, run.parity, chunks));
+}
+
+async function cmdInspect(): Promise<void> {
+  const file = opt('run') ?? args[1];
+  if (!file) throw new Error('Usage: npm run inspect -- --run results/<stamp>/raw.json');
+  const run = JSON.parse(readFileSync(resolve(file), 'utf8')) as BenchRun;
+  log(renderInspection(run));
 }
 
 function cmdHelp(): void {
@@ -523,6 +532,7 @@ function cmdHelp(): void {
   npm run doctor                      Check Oracle, the models, and the app reranker
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run
+  npm run inspect -- --run <raw.json> Per-iteration forensics: candidates scored, outliers
 
 Flags for bench:
   --backend oracle|fixture   Where retrieval and reranking run (default: oracle)
@@ -555,6 +565,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   doctor: cmdDoctor,
   bench: cmdBench,
   report: cmdReport,
+  inspect: cmdInspect,
   help: cmdHelp,
 };
 
