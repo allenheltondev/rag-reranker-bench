@@ -65,6 +65,8 @@ export const oracle = {
   rerankModel: process.env.ORACLE_RERANK_MODEL ?? 'BGE_RERANKER',
   /** Dimensionality of the embedding model; must match the VECTOR column in sql/01_schema.sql. */
   embedDims: num(process.env.ORACLE_EMBED_DIMS, 384),
+  /** Keep embedding and reranking on dedicated sessions to avoid model-switch overhead. */
+  queryEmbedding: process.env.ORACLE_QUERY_EMBEDDING ?? 'separate-session',
   /**
    * Which documented API to use for in-database reranking:
    *   'prediction'     -> PREDICTION(model USING :q AS FIRST_INPUT, text AS SECOND_INPUT)

@@ -3,6 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { oracle } from '../config.js';
 import { assertIdentifier } from './oracle.js';
+import { queryVectorExpression } from './query-vector.js';
 
 const sqlDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../sql');
 
@@ -47,6 +48,7 @@ export function queryEmbedInput(): string {
 export function baseTokens(): Record<string, string> {
   return {
     QUERY_EMBED_INPUT: queryEmbedInput(),
+    QUERY_VECTOR: queryVectorExpression(),
     PREFIX: assertIdentifier(oracle.schemaPrefix, 'ORACLE_SCHEMA_PREFIX'),
     EMBED_MODEL: assertIdentifier(oracle.embedModel, 'ORACLE_EMBED_MODEL'),
     RERANK_MODEL: assertIdentifier(oracle.rerankModel, 'ORACLE_RERANK_MODEL'),

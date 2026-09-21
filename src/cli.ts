@@ -536,7 +536,7 @@ async function cmdExplain(): Promise<void> {
   if (!query) throw new Error(`No query ${JSON.stringify(wanted)} in the corpus.`);
 
   const sql = new InDbReranker(cfg.rrfK).sqlFor(retrieval, control);
-  const binds = usedBinds(sql, bindsFor(query, n, cfg.rrfK, topK));
+  const { queryVectorBinds } = await import('./db/query-vector.js');
 
   log(`${retrieval} · ${control ? 'control' : 'rerank'} · N=${n} · top-K=${topK} · ${query.id} · ${warmup} warmup`);
   log('');
@@ -552,16 +552,19 @@ async function cmdExplain(): Promise<void> {
     // touch the model first, which is exactly the step under examination. The benchmark warms
     // up before measuring; so does this. ALLSTATS LAST reports the final execution only.
     const runs: number[] = [];
-    let rows: { ID: string; SCORE: number }[] = [];
+    let rows: { ID: string; SCORE: number; CANDIDATES_SCORED: number }[] = [];
     for (let i = 0; i <= warmup; i++) {
       const started = performance.now();
-      const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
+      const binds = usedBinds(sql, { ...bindsFor(query, n, cfg.rrfK, topK),
+        ...await queryVectorBinds(retrieval, query.text) });
+      const res = await conn.execute<{ ID: string; SCORE: number; CANDIDATES_SCORED: number }>(sql, binds, {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
       });
       runs.push(performance.now() - started);
       rows = res.rows ?? [];
     }
     log(`Returned ${rows.length} row(s).`);
+    log(`Candidate pool before top-K: ${rows[0]?.CANDIDATES_SCORED ?? 0}. Embedding mode: ${oracle.queryEmbedding}.`);
     log(`Executions: ${runs.map((m) => `${m.toFixed(0)} ms`).join(' → ')}`);
     if (warmup > 0) {
       log(`The plan below is the last of these. The first is cold: it loads the ONNX models into`);
@@ -607,16 +610,15 @@ async function cmdExplain(): Promise<void> {
     const chars = rows.map((r) => lenById.get(r.ID) ?? 0);
     if (chars.length > 0) {
       const total = chars.reduce((a, b) => a + b, 0);
-      log(`Scored text: ${total} characters over ${rows.length} candidate(s),`
+      log(`Text in returned rows: ${total} characters over ${rows.length} candidate(s),`
         + ` ${Math.round(total / rows.length)} on average.`);
       log(rows.map((r, i) => `  ${r.ID} (${chars[i]} chars)`).join('\n'));
     }
-    log(`A-Rows is what each step really produced. Every step should show ${n}; more would mean`);
-    log('the cross-encoder scored rows the candidate limit then discarded.');
+    log('A-Rows reports rows produced by each operator, not scalar model invocation counts.');
+    log('Upstream retrieval can legitimately produce more rows than the candidate limit.');
     log('');
-    log('A-Time is cumulative: a step includes its children. Subtract a step from its child to');
-    log('get what that step itself cost. The scoring expression is projected by the outermost');
-    log('SORT ORDER BY STOPKEY, so that step minus the one below it is the cost of scoring.');
+    log('A-Time is cumulative and can help localize work, but does not isolate scalar inference');
+    log('or model initialization. Use the matched controls and model-cost probe for that comparison.');
   });
   await closePool().catch(() => {});
 }

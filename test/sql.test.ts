@@ -1,17 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStages, runConfigFromEnv } from '../src/config.js';
-import { arms } from '../src/retrieval/candidates.js';
+import { arms, OracleCandidateSource } from '../src/retrieval/candidates.js';
 import { loadSql, queryEmbedInput, render, splitStatements, usedBinds } from '../src/db/sql.js';
 import { assertIdentifier } from '../src/db/oracle.js';
-import { controlExpr, declaredAttributes, defaultScoreExpr, scoreExpr, scoreExprAttributes } from '../src/rerank/indb.js';
+import { InDbReranker, controlExpr, declaredAttributes, defaultScoreExpr, scoreExpr, scoreExprAttributes } from '../src/rerank/indb.js';
 import type { Stage } from '../src/types.js';
+import { queryVectorExpression } from '../src/db/query-vector.js';
 
 const RETRIEVALS: Array<Stage['retrieval']> = ['vector', 'lexical', 'hybrid-rrf'];
 
 /** Comment lines keep their placeholders on purpose, so assertions look at the SQL only. */
 const executable = (sql: string): string =>
   sql.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+
+test('separate-session SQL binds a vector and lexical SQL requires no unused vector bind', () => {
+  assert.equal(queryVectorExpression('separate-session'), ':qvec');
+  assert.throws(() => queryVectorExpression('typo'), /must be inline or separate-session/);
+  for (const source of [new OracleCandidateSource(60), new InDbReranker(60)]) {
+    const sql = executable(source.sqlFor('lexical'));
+    assert.ok(!sql.includes(':qvec'));
+    assert.ok(!sql.includes('VECTOR_EMBEDDING'));
+  }
+  const sql = loadSql('rerank_indb_prediction.sql', {
+    ...arms('vector', 'BENCH'), QUERY_VECTOR: queryVectorExpression('separate-session'), SCORE_EXPR: scoreExpr(),
+  });
+  const vector = { type: 'vector', val: new Float32Array(384) };
+  assert.equal(usedBinds(sql, { qvec: vector }).qvec, vector);
+  assert.ok(!executable(sql).includes('VECTOR_EMBEDDING'));
+});
 
 test('render substitutes tokens and refuses to leave any behind', () => {
   assert.equal(render('a ${X} b', { X: '1' }), 'a 1 b');
@@ -233,7 +250,7 @@ test('no transfer batch unless both arms are present', () => {
 test('the query embedding input is bare unless a prefix is configured', () => {
   // Default: nothing is concatenated, so a model that wants no instruction sees only the query.
   assert.equal(queryEmbedInput(), ':qtext');
-  const sql = executable(loadSql('query_candidates.sql', arms('vector', 'BENCH')));
+  const sql = executable(loadSql('query_candidates.sql', { ...arms('vector', 'BENCH'), QUERY_VECTOR: queryVectorExpression('inline') }));
   assert.ok(sql.includes('VECTOR_EMBEDDING(DOC_EMBEDDER USING :qtext AS DATA)'));
 });
 
@@ -258,7 +275,7 @@ test('binds are pruned to those the rendered statement actually uses', () => {
   const all = { qtext: 'q', contains: '{q}', tenant: 't', owner: 'o', pool: 10, n: 10, rrfk: 60 };
 
   // Vector-only has no lexical subquery, so :contains is absent and must not be bound.
-  const vector = loadSql('query_candidates.sql', arms('vector', 'BENCH'));
+  const vector = loadSql('query_candidates.sql', { ...arms('vector', 'BENCH'), QUERY_VECTOR: queryVectorExpression('inline') });
   const vectorBinds = usedBinds(vector, all);
   assert.ok(!('contains' in vectorBinds), ':contains bound for a statement without a text search');
   assert.deepEqual(
@@ -267,7 +284,7 @@ test('binds are pruned to those the rendered statement actually uses', () => {
   );
 
   // Hybrid uses every one of them.
-  const hybrid = loadSql('query_candidates.sql', arms('hybrid-rrf', 'BENCH'));
+  const hybrid = loadSql('query_candidates.sql', { ...arms('hybrid-rrf', 'BENCH'), QUERY_VECTOR: queryVectorExpression('inline') });
   assert.deepEqual(Object.keys(usedBinds(hybrid, all)).sort(), Object.keys(all).sort());
 
   // Lexical-only still embeds the query for nothing but keeps every bind but none extra.

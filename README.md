@@ -8,11 +8,30 @@ application code — same model, same candidates, same queries, different execut
 The question it exists to answer is not "is reranking good" and not "does Oracle win". It is:
 *what does keeping the reranker next to the data actually cost, and what does it buy?*
 
+### September 21 investigation
+
+The roughly two-second fixed cost is reproducibly associated with alternating the embedding
+and reranking models on the same database session. Binding an already computed query vector
+removes it. Computing the vector in a separate statement on the **same** session does not.
+This identifies an operational trigger, not the database's internal cache implementation.
+
+The default is now `ORACLE_QUERY_EMBEDDING=separate-session`: a dedicated Oracle connection
+embeds each query with the original model; the retrieval connection receives that exact
+FLOAT32 vector. Both application and in-database arms use this path. Embeddings are not cached,
+and both calls are inside the end-to-end timer. Candidate text stays inside Oracle for the
+in-database arm. This uses two database sessions, whose resource cost matters under concurrency.
+Set `ORACLE_QUERY_EMBEDDING=inline` to reproduce the original single-statement architecture.
+Each new run records the mode. Old result files remain evidence of the original architecture.
+
+`npm run probe:model-cost` compares inline, bound-vector, same-session sequential,
+same-model and dedicated-session cases, saving raw observations under
+`results/model-cost-probe/`. Run it alone, without another benchmark competing for CPU.
+
 ---
 
 ## What is being measured
 
-Retrieval is held constant. One statement does scope filtering, lexical retrieval, vector
+Retrieval is held constant. After query embedding, one statement does scope filtering, lexical retrieval, vector
 retrieval and RRF fusion, and produces a candidate list. That identical candidate list is then
 scored two ways:
 
@@ -44,13 +63,14 @@ Fairness over flattery, and an honest tradeoff over a winner. Concretely:
 4. **Bytes leaving the database is a first-class metric,** because it is the architectural
    difference, not a footnote. The in-database path returns identifiers and scores. The
    application path returns every candidate's full text so it can be scored.
-5. **Nothing is reported more precisely than it was measured.** The in-database path is one
+5. **Nothing is reported more precisely than it was measured.** The in-database retrieval and scoring path is one
    SQL statement and cannot be decomposed from outside the database, so it reports a total and
    no sub-phases. Its scoring cost comes from the subtraction below, with an interval.
+   Separate-session mode includes its preceding embedding call in that total.
 
 ### How the reranking cost is calculated
 
-The in-database path is one statement. There is no point between "query sent" and "rows back"
+The in-database retrieval/scoring path is one statement. There is no point between "query sent" and "rows back"
 where application code can read a clock, so the cost of the cross-encoder cannot be observed
 directly. It can be calculated, if the calculation is set up carefully. Three things make it
 technically sound:
@@ -100,14 +120,13 @@ tokenize, infer and sort. The report prints both side by side. If the method is 
 two agree, and whatever gap exists is the measurement error to apply to every subtracted
 number in the report. On the fixture backend they agree within 1.5%.
 
-The same machinery gives one more calculable number. The `transfer` batch holds only the two
-controls, run interleaved — they do identical work up to the projection (one returns
-identifiers and a number, the other identifiers and every candidate's full text) and neither
-runs inference, so there is nothing to carry over between them. Their paired difference is the
-cost of moving the text out of the database and nothing else:
+The `transfer` batch compares the two controls, run interleaved. This is a comparison of
+candidate-fetch and in-database-control latency, **not an isolated network-transfer cost**:
+the latter evaluates LENGTH, reorders candidates and returns top-K, while the former returns
+all candidate text. SQL work and returned row counts therefore also differ:
 
 ```
-transfer(N) = median over (query, repeat, iteration) of [ T_app_control − T_indb_control ]
+control_delta(N) = median over (query, repeat, iteration) of [ T_app_control − T_indb_control ]
 ```
 
 What this does not remove: the treatment and control are different SQL text, so they are
@@ -121,7 +140,7 @@ with `EXPLAIN PLAN` on both statements from `--dump-sql`.
 |---|---|
 | p50 / p95 / p99 end-to-end | The number a user feels. p95 matters more than p50 for a reranker. |
 | Scoring cost, median Δ with 95% CI | Treatment minus matched control, paired. Isolates inference from everything else. |
-| Transfer cost, median Δ with 95% CI | App control minus in-DB control, paired. The cost of the text leaving the database. |
+| Control latency difference, median Δ with 95% CI | App control minus in-DB control, paired. Includes payload, sorting and row-count differences. |
 | Subtraction vs direct, app path | Validates the subtraction method against clocks where clocks exist. |
 | CV per stage | Run-to-run stability. Flags stages whose intervals should not be trusted yet. |
 | nDCG@10, Recall@10, MRR@10 | Whether the reordering was worth paying for. |
@@ -152,9 +171,9 @@ npm run bench -- --backend fixture --iterations 5 --warmup 2 --candidates 10,40
 Two targets. **Local** (Oracle Free in a container, app on the same machine) proves the
 pipeline and gives you the compute comparison. **Oracle Cloud** (Autonomous Database plus a
 separate VM, [`infra/oci`](infra/oci/README.md)) is what a published number should come from:
-with the database and the application on different hosts, the "bytes leaving the database"
-measurement crosses a real network instead of a loopback interface, and the locality argument
-becomes something the transfer batch can actually measure. The steps below are the local
+with the database and the application on different hosts, candidate text crosses a real network
+instead of a loopback interface. End-to-end latency can then test the locality argument;
+the control delta still includes SQL-work differences. The steps below are the local
 path; the cloud README maps each one onto its equivalent.
 
 ### 1. A database

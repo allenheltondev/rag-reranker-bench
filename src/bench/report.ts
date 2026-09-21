@@ -342,6 +342,7 @@ export function renderMarkdown(
   if (run.environment.app) {
     out.push(`| App rerank model | ${run.environment.app.modelPath} |`);
     out.push(`| App execution | ${run.environment.app.executionProviders.join(', ')}, dtype ${run.environment.app.dtype}, intra-op threads ${run.environment.app.intraOpThreads} |`);
+    out.push(`| App tokenization/batching | max length ${run.environment.app.maxLength ?? 'not recorded'}, batch size ${run.environment.app.batchSize ?? 'not recorded'} |`);
   }
   out.push('');
   // A reranker comparison where one side has more CPU than the other is not measuring where
@@ -360,6 +361,10 @@ export function renderMarkdown(
   }
   out.push('');
   out.push(`Queries: ${queries.length} · iterations: ${run.config.iterations} · warmup: ${run.config.warmup} · repeats: ${run.config.repeats} · top-K: ${k} · RRF k: ${run.config.rrfK}`);
+  if (run.environment.oracle) {
+    out.push('');
+    out.push(`Query embedding: **${run.environment.oracle.queryEmbedding ?? 'inline (legacy run)'}**. Separate-session mode includes a fresh embedding call and both database round trips in every vector/hybrid request; the query vector is not cached.`);
+  }
   const batches = [...new Set(run.stages.map((s) => s.stage.batch))];
   out.push('');
   out.push(`Isolation batches, in order, with a reset between each: ${batches.map((b) => `\`${b}\``).join(' → ')}. Quiesce ${run.config.quiesceMs} ms${run.config.resetCommand ? `, reset command \`${run.config.resetCommand}\`` : ''}.`);
@@ -402,6 +407,10 @@ export function renderMarkdown(
   out.push(`| Stage | p50 (ms) | p95 (ms) | p99 (ms) | nDCG@${k} | nDCG 95% CI | Recall@${k} | MRR@${k} | Bytes from DB |`);
   out.push('|---|---:|---:|---:|---:|---|---:|---:|---:|');
   for (const s of summaries) {
+    if (s.stage.role === 'control') {
+      out.push(`| ${s.stage.label} | ${fmt(s.p50)} | ${fmt(s.p95)} | ${fmt(s.p99)} | n/a | n/a | n/a | n/a | ${fmtBytes(s.bytesPerQuery)} |`);
+      continue;
+    }
     const ci = `[${fmt(s.quality.ndcgCI.lower, 3)}, ${fmt(s.quality.ndcgCI.upper, 3)}]`;
     out.push(`| ${s.stage.label} | ${fmt(s.p50)} | ${fmt(s.p95)} | ${fmt(s.p99)} | ${fmt(s.quality.ndcg, 3)} | ${ci} | ${fmt(s.quality.recall, 3)} | ${fmt(s.quality.mrr, 3)} | ${fmtBytes(s.bytesPerQuery)} |`);
   }
@@ -477,9 +486,9 @@ export function renderMarkdown(
       out.push('');
       out.push('The application path can be timed both ways: by subtraction, exactly as the in-database');
       out.push('path has to be, and directly with clocks around tokenize, infer and sort. If the two');
-      out.push('agree, the subtraction method is sound and the in-database figures above can be trusted');
-      out.push('to the same degree. If they do not, the gap is measurement error and it applies to every');
-      out.push('subtracted number in this report.');
+      out.push('agree, this validates subtraction for the application arm. It does not prove that the');
+      out.push('database treatment and control share all other costs: execution plans and model');
+      out.push('initialization still require separate checks.');
       out.push('');
       out.push('| Retrieval | N | By subtraction (ms) | Measured directly (ms) | Gap (ms) | Gap as % of direct |');
       out.push('|---|---:|---:|---:|---:|---:|');
@@ -510,18 +519,15 @@ export function renderMarkdown(
 
   const transfers = transferCosts(run);
   if (transfers.length > 0) {
-    out.push('## Cost of moving the candidate text to the application');
+    out.push('## Candidate-fetch versus in-database control latency');
     out.push('');
-    out.push('From the transfer batch: the two controls alone, run interleaved. They do identical work');
-    out.push('up to the projection - one returns identifiers and a number, the other identifiers and');
-    out.push('every candidate\'s full text - and neither runs inference. Their paired difference is');
-    out.push('the cost of that text leaving the database.');
+    out.push('From the transfer batch: the two controls alone, run interleaved, without cross-encoder scoring.');
+    out.push('The application control returns all candidate text; the in-database control evaluates');
+    out.push('LENGTH, sorts by it, and returns top-K. Their difference includes SQL, row-count and');
+    out.push('payload differences. It is not an isolated measurement of network transfer cost.');
     out.push('');
-    out.push('On a single machine this number is near zero and can come out negative, because the');
-    out.push('loopback interface costs nothing and the two controls do slightly different work in');
-    out.push('the database instead: one concatenates the text to measure it, the other just returns');
-    out.push('it. Treat a local figure as "too small to measure". It becomes meaningful only with');
-    out.push('the database and the application on separate hosts.');
+    out.push('A negative value can mean the application control does less database work. A tight');
+    out.push('confidence interval does not remove this confounding, even on separate hosts.');
     out.push('');
     out.push('| Retrieval | N | Text returned (app) | Returned (in-DB) | Transfer, median Δ (ms) | 95% CI | Pairs |');
     out.push('|---|---:|---:|---:|---:|---|---:|');
@@ -554,13 +560,9 @@ export function renderMarkdown(
     out.push('Same weights, same candidates, different execution location.');
     out.push('');
     out.push('Jaccard is the one that matters: it says whether the same passages reach the model.');
-    out.push('Kendall tau below 1 with identical membership means the two arms ordered near-tied');
-    out.push('candidates differently, which quantized weights make likely - int8 compresses the');
-    out.push('score gaps, and the application arm scores in batches while the database scores one');
-    out.push('row per call, so activations are scaled over different inputs. Set');
-    out.push('APP_RERANK_BATCH_SIZE=1 to remove that difference and see whether the ordering');
-    out.push('converges. A Jaccard below 1, by contrast, would mean the arms disagree about which');
-    out.push('passages are relevant at all, and that is not a rounding effect.');
+    out.push('Kendall tau measures ordering agreement. Jaccard below 1 means top-K membership');
+    out.push('differs; small numerical differences between near-tied scores at the cutoff can');
+    out.push('cause this too. These metrics alone do not identify the cause of disagreement.');
     out.push('');
     out.push(`| Retrieval | N | Top-${k} Jaccard | Kendall tau | Queries with a different top result |`);
     out.push('|---|---:|---:|---:|---|');
@@ -651,8 +653,9 @@ export function renderCsv(run: BenchRun, queries: readonly Query[], chunks?: rea
     rows.push([
       s.stage.id, s.stage.role, s.stage.retrieval, s.stage.reranker, s.stage.candidateCount, s.stage.topK,
       s.p50.toFixed(3), s.p95.toFixed(3), s.p99.toFixed(3), s.meanMs.toFixed(3), s.cv.toFixed(4),
-      s.bytesPerQuery.toFixed(0), s.quality.ndcg.toFixed(4), s.quality.recall.toFixed(4),
-      s.quality.mrr.toFixed(4),
+      s.bytesPerQuery.toFixed(0), s.stage.role === 'control' ? '' : s.quality.ndcg.toFixed(4),
+      s.stage.role === 'control' ? '' : s.quality.recall.toFixed(4),
+      s.stage.role === 'control' ? '' : s.quality.mrr.toFixed(4),
       String(s.violations.tenant + s.violations.owner + s.violations.expired),
     ].join(','));
   }

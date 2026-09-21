@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scoringCosts, transferCosts } from '../src/bench/report.js';
+import { renderCsv, renderMarkdown, scoringCosts, transferCosts } from '../src/bench/report.js';
 import { runConfigFromEnv } from '../src/config.js';
 import type { BenchRun, IterationResult, Stage, StageRun } from '../src/types.js';
 
@@ -23,6 +23,14 @@ function run(stages: StageRun[], repeats = 1): BenchRun {
     stages,
   };
 }
+
+test('latency controls do not present their artificial order as relevance quality', () => {
+  const r = run([{ stage: stage({ id: 'control', label: 'Control', role: 'control' }), iterations: [obs('q', 0, 0, 10)] }]);
+  const md = renderMarkdown(r, []);
+  assert.match(md, /\| Control \|[^\n]*\| n\/a \| n\/a \| n\/a \| n\/a \|/);
+  const csv = renderCsv(r, []).split('\n')[1]!.split(',');
+  assert.deepEqual(csv.slice(12, 15), ['', '', '']);
+});
 
 test('scoring cost is the median of per-observation differences, matched on query, repeat and iteration', () => {
   const treatment = stage({ id: 't', group: 'in-db:hybrid-rrf@40' });

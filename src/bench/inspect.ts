@@ -15,8 +15,8 @@
  * iteration together, so with hundreds of observations one pathological iteration
  * sits below p99 and never surfaces.
  *
- * The in-database path cannot count its own scored rows: it is one statement and only
- * the top-K comes back. It records the requested depth instead. Where a run also
+ * Legacy in-database runs recorded requested depth instead of counting candidates.
+ * New runs include a window count before scoring and top-K truncation. Where a legacy run also
  * measured the application arm at the same retrieval and depth, and candidate parity
  * confirmed the two arms saw identical candidates, the measured count is borrowed
  * from there. That is stated in the output wherever it happens, never assumed.
@@ -27,7 +27,7 @@ import type { BenchRun, IterationResult, Stage, StageRun } from '../types.js';
 /**
  * Where a stage's candidate counts came from.
  *
- * `measured` - the application arm counted the candidates it was handed.
+ * `measured` - the arm counted the candidate pool before top-K truncation.
  * `borrowed` - taken from the application arm at the same retrieval and depth, which
  *   candidate parity confirmed saw an identical candidate set.
  * `requested` - the depth the stage asked for, because no application arm ran. Correct
@@ -146,7 +146,8 @@ function resolveCounts(
   measured: Map<string, Map<string, number>>,
 ): { perQuery: Map<string, number>; source: CountSource } {
   const byQuery = groupByQuery(run);
-  if (run.stage.reranker === 'app' && scores(run.stage)) {
+  if (scores(run.stage) && (run.stage.reranker === 'app'
+      || run.iterations.every(i => i.candidateCountSource === 'measured'))) {
     const perQuery = new Map<string, number>();
     for (const [q, its] of byQuery) perQuery.set(q, median(its.map((i) => i.candidatesScored)));
     return { perQuery, source: 'measured' };
@@ -274,13 +275,10 @@ export function renderInspection(run: BenchRun): string {
   out.push('## Candidates requested against candidates scored');
   out.push('');
   out.push('Only stages that score are listed; baselines and controls do not run the model.');
-  out.push('`Scored` is measured for the application arm. The in-database arm is one statement');
-  out.push('that returns only its top-K, so it cannot count its own scored rows; where the run');
-  out.push('measured the application arm at the same retrieval and depth, and candidate parity');
-  out.push('confirmed both arms saw identical candidates, that measured count is shown and');
-  out.push('marked borrowed. Where no application arm ran, the requested depth is shown and');
-  out.push('marked as such: correct where retrieval always fills the pool, an overstatement');
-  out.push('where it runs out of matches.');
+  out.push('New runs measure candidate counts in both arms, before top-K truncation. Legacy');
+  out.push('in-database observations recorded requested depth; for those, application counts');
+  out.push('at the same retrieval/depth are borrowed when available. Otherwise requested depth');
+  out.push('is labelled requested and can overstate the work when retrieval exhausts its pool.');
   out.push('');
   out.push('| Stage | Requested | Scored min/med/max | Source | p50 (ms) | ms per candidate |');
   out.push('|---|---:|---:|---|---:|---:|');

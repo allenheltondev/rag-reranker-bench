@@ -1,5 +1,6 @@
 import oracledb from 'oracledb';
 import { oracle } from '../config.js';
+import { closeEmbeddingPool } from './query-vector.js';
 
 let pool: oracledb.Pool | null = null;
 
@@ -145,6 +146,7 @@ export async function withElevatedConnection<T>(
 }
 
 export async function closePool(): Promise<void> {
+  await closeEmbeddingPool();
   if (pool) {
     await pool.close(5);
     pool = null;

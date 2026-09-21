@@ -38,6 +38,13 @@ const bench = (stages: StageRun[]): BenchRun => ({ stages }) as unknown as Bench
 
 const noMeasured = new Map<string, Map<string, number>>();
 
+test('new in-database observations use their measured counts without an application arm', () => {
+  const observation = { ...it('q1', 0, 1900, 19), candidateCountSource: 'measured' as const };
+  const r = inspectStage(run([observation], { reranker: 'in-db' }), noMeasured);
+  assert.equal(r.countsFrom, 'measured');
+  assert.equal(r.scoredMedian, 19);
+});
+
 test('per-candidate cost divides by candidates scored, not candidates requested', () => {
   const r = inspectStage(run([it('q1', 0, 1000, 20), it('q1', 1, 1000, 20)]), noMeasured);
   assert.equal(r.requestedCandidates, 40);

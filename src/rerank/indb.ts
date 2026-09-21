@@ -2,6 +2,7 @@ import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import { assertIdentifier, withConnection } from '../db/oracle.js';
 import { loadSql, usedBinds } from '../db/sql.js';
+import { queryVectorBinds, queryVectorExpression } from '../db/query-vector.js';
 import { arms, bindsFor } from '../retrieval/candidates.js';
 import type { Query, RankedResult, Stage } from '../types.js';
 
@@ -73,9 +74,10 @@ export function describeAttributeMismatch(): string | null {
 
 export interface InDbOutcome {
   results: RankedResult[];
-  /** Wall time for the single statement: filter, retrieve, fuse, rerank, return. */
+  candidatesScored: number;
+  /** Wall time including query embedding (when separate), retrieval, scoring and fetch. */
   ms: number;
-  /** Bytes returned to the application: identifiers and scores only. */
+  /** Payload bytes returned: identifiers, scores, count metadata, and any query vector. */
   bytes: number;
 }
 
@@ -90,11 +92,12 @@ export interface InDbOutcome {
  * the two timings per query and iteration. See README, "How the reranking cost is calculated".
  */
 export class InDbReranker {
-  constructor(private readonly rrfK: number) {}
+  constructor(private readonly rrfK: number, private readonly queryEmbedding = oracle.queryEmbedding) {}
 
   sqlFor(retrieval: Stage['retrieval'], control = false): string {
     return loadSql('rerank_indb_prediction.sql', {
       ...arms(retrieval, oracle.schemaPrefix.toUpperCase()),
+      QUERY_VECTOR: retrieval === 'lexical' ? 'NULL' : queryVectorExpression(this.queryEmbedding),
       SCORE_EXPR: control ? controlExpr() : scoreExpr(),
     });
   }
@@ -107,10 +110,11 @@ export class InDbReranker {
     control = false,
   ): Promise<InDbOutcome> {
     const sql = this.sqlFor(retrieval, control);
-    const binds = usedBinds(sql, bindsFor(query, n, this.rrfK, topK));
     return withConnection(async (conn) => {
       const started = performance.now();
-      const res = await conn.execute<{ ID: string; SCORE: number }>(sql, binds, {
+      const binds = usedBinds(sql, { ...bindsFor(query, n, this.rrfK, topK),
+        ...await queryVectorBinds(retrieval, query.text, this.queryEmbedding) });
+      const res = await conn.execute<{ ID: string; SCORE: number; CANDIDATES_SCORED: number }>(sql, binds, {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
       });
       const ms = performance.now() - started;
@@ -120,10 +124,11 @@ export class InDbReranker {
         rank: i + 1,
         score: r.SCORE,
       }));
-      // 8 bytes for a double, plus the identifier. The candidate text is not in this number
-      // because it never left the database.
-      const bytes = rows.reduce((acc, r) => acc + Buffer.byteLength(r.ID, 'utf8') + 8, 0);
-      return { results, ms, bytes };
+      // Logical payload: two numeric values per row, identifier, and any separately fetched
+      // FLOAT32 query vector. Candidate text stays in the database; this is not wire size.
+      const bytes = rows.reduce((acc, r) => acc + Buffer.byteLength(r.ID, 'utf8') + 16, 0)
+        + (retrieval !== 'lexical' && this.queryEmbedding === 'separate-session' ? oracle.embedDims * 4 : 0);
+      return { results, ms, bytes, candidatesScored: control ? 0 : (rows[0]?.CANDIDATES_SCORED ?? 0) };
     });
   }
 }

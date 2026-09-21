@@ -77,6 +77,7 @@ export async function captureEnvironment(cfg: RunConfig): Promise<EnvironmentInf
       banner: info.banner,
       clientMode: info.clientMode,
       embedModel: oracle.embedModel,
+      queryEmbedding: oracle.queryEmbedding,
       cpuCount: info.cpuCount,
       pgaTargetMb: info.pgaTargetMb,
       pgaLimitMb: info.pgaLimitMb,
@@ -94,6 +95,8 @@ export async function captureEnvironment(cfg: RunConfig): Promise<EnvironmentInf
       executionProviders: cfg.backend === 'fixture' ? ['fixture'] : [app.device],
       intraOpThreads: app.intraOpThreads ?? 'default',
       dtype: cfg.backend === 'fixture' ? 'n/a' : app.dtype,
+      batchSize: app.batchSize,
+      maxLength: app.maxLength,
     };
   }
   return env;

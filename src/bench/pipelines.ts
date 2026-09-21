@@ -130,7 +130,8 @@ export class InDbRerankPipeline implements Pipeline {
       timings,
       results: outcome.results,
       bytesFromDb: outcome.bytes,
-      candidatesScored: this.control ? 0 : this.stage.candidateCount,
+      candidatesScored: outcome.candidatesScored,
+      candidateCountSource: 'measured',
     };
   }
 }

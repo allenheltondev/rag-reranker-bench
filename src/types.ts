@@ -103,6 +103,8 @@ export interface IterationResult {
   bytesFromDb: number;
   /** Number of candidates actually scored. */
   candidatesScored: number;
+  /** Absent on legacy files where the in-database count was only the requested limit. */
+  candidateCountSource?: 'measured';
 }
 
 /**
@@ -181,6 +183,7 @@ export interface EnvironmentInfo {
     banner: string;
     clientMode: string;
     embedModel: string;
+    queryEmbedding?: string;
     /** CPUs the database has, which on a container is its share and not the host's. */
     cpuCount: number | null;
     pgaTargetMb: number | null;
@@ -195,5 +198,7 @@ export interface EnvironmentInfo {
     executionProviders: string[];
     intraOpThreads: number | 'default';
     dtype: string;
+    batchSize?: number;
+    maxLength?: number;
   };
 }

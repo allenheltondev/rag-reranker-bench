@@ -24,7 +24,8 @@
     "bench": "tsx src/cli.ts bench",
     "report": "tsx src/cli.ts report",
     "inspect": "tsx src/cli.ts inspect",
-    "explain": "tsx src/cli.ts explain"
+    "explain": "tsx src/cli.ts explain",
+    "probe:model-cost": "tsx scripts/probe-model-cost.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",

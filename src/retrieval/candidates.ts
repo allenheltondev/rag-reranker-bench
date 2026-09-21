@@ -2,11 +2,12 @@ import oracledb from 'oracledb';
 import { oracle } from '../config.js';
 import { toContainsExpression, withConnection } from '../db/oracle.js';
 import { loadSql, usedBinds } from '../db/sql.js';
+import { queryVectorBinds, queryVectorExpression } from '../db/query-vector.js';
 import type { Candidate, Query, Stage } from '../types.js';
 
 export interface CandidateBatch {
   candidates: Candidate[];
-  /** UTF-8 bytes of candidate text that crossed the database boundary. */
+  /** Logical payload: UTF-8 candidate text/IDs plus any separately fetched query vector. */
   bytes: number;
   /** Wall time for the candidate query, including fetch. */
   ms: number;
@@ -103,24 +104,27 @@ export function bindsFor(query: Query, n: number, rrfK: number, topK?: number): 
 
 export class OracleCandidateSource implements CandidateSource {
   readonly kind = 'oracle' as const;
-  constructor(private readonly rrfK: number) {}
+  constructor(private readonly rrfK: number, private readonly queryEmbedding = oracle.queryEmbedding) {}
 
   sqlFor(retrieval: Stage['retrieval']): string {
-    return loadSql('query_candidates.sql', arms(retrieval, oracle.schemaPrefix.toUpperCase()));
+    return loadSql('query_candidates.sql', { ...arms(retrieval, oracle.schemaPrefix.toUpperCase()),
+      QUERY_VECTOR: retrieval === 'lexical' ? 'NULL' : queryVectorExpression(this.queryEmbedding),
+    });
   }
 
   async generate(query: Query, retrieval: Stage['retrieval'], n: number): Promise<CandidateBatch> {
     const sql = this.sqlFor(retrieval);
-    const binds = usedBinds(sql, bindsFor(query, n, this.rrfK));
     return withConnection(async (conn) => {
       const started = performance.now();
+      const binds = usedBinds(sql, { ...bindsFor(query, n, this.rrfK),
+        ...await queryVectorBinds(retrieval, query.text, this.queryEmbedding) });
       const res = await conn.execute<CandidateRow>(sql, binds, {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
         fetchInfo: { CONTENT: { type: oracledb.STRING } },
       });
       const ms = performance.now() - started;
       const rows = res.rows ?? [];
-      let bytes = 0;
+      let bytes = retrieval !== 'lexical' && this.queryEmbedding === 'separate-session' ? oracle.embedDims * 4 : 0;
       const candidates: Candidate[] = rows.map((r, i) => {
         bytes += Buffer.byteLength(r.TITLE, 'utf8') + Buffer.byteLength(r.CONTENT, 'utf8')
           + Buffer.byteLength(r.ID, 'utf8');
