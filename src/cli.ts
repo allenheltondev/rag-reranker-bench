@@ -1,7 +1,7 @@
 import { cpus } from 'node:os';
 import oracledb from 'oracledb';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { app, buildStages, oracle, paths, runConfigFromEnv } from './config.js';
 import { generateCorpus } from './corpus/generate.js';
 import { assertIdentifier, closePool, describeOracle, hintFor, withConnection } from './db/oracle.js';
@@ -13,6 +13,7 @@ import { usedBinds } from './db/sql.js';
 import { buildDeps, pipelineFor, runBenchmark, verifyCandidateParity } from './bench/harness.js';
 import { renderCostsCsv, renderCsv, renderMarkdown } from './bench/report.js';
 import { renderInspection } from './bench/inspect.js';
+import { measureDiversity, renderDiversity } from './bench/diversity.js';
 import { exportAppModel } from './tools/export-app-model.js';
 import { readZip } from './tools/unzip.js';
 import type { BenchRun, Chunk, Query, RunConfig } from './types.js';
@@ -623,6 +624,55 @@ async function cmdExplain(): Promise<void> {
   await closePool().catch(() => {});
 }
 
+async function loadEmbeddings(ids: readonly string[]): Promise<Map<string, Float32Array>> {
+  const table = `${assertIdentifier(oracle.schemaPrefix, 'schema prefix').toUpperCase()}_CHUNKS`;
+  const out = new Map<string, Float32Array>();
+  await withConnection(async (conn) => {
+    // Oracle caps an IN list at 1,000 expressions.
+    for (let i = 0; i < ids.length; i += 500) {
+      const slice = ids.slice(i, i + 500);
+      const res = await conn.execute<{ ID: string; EMBEDDING: Float32Array }>(
+        `SELECT ID, EMBEDDING FROM ${table} WHERE ID IN (${slice.map((_, j) => `:i${j}`).join(', ')})`,
+        Object.fromEntries(slice.map((id, j) => [`i${j}`, id])),
+        { outFormat: oracledb.OUT_FORMAT_OBJECT },
+      );
+      for (const r of res.rows ?? []) if (r.EMBEDDING) out.set(r.ID, r.EMBEDDING);
+    }
+  });
+  return out;
+}
+
+async function cmdDiversity(): Promise<void> {
+  const file = opt('run') ?? args[1];
+  if (!file || file.startsWith('--')) throw new Error('Usage: npm run diversity -- --run results/<stamp>/raw.json [--no-db]');
+  const run = JSON.parse(readFileSync(resolve(file), 'utf8')) as BenchRun;
+  const { chunks } = readCorpus();
+
+  let embeddings: Map<string, Float32Array> | null = null;
+  if (!flag('no-db')) {
+    const ids = new Set<string>();
+    for (const s of run.stages) for (const it of s.iterations) for (const r of it.results) ids.add(r.chunkId);
+    try {
+      embeddings = await loadEmbeddings([...ids]);
+      if (embeddings.size < ids.size) {
+        log(`Note: ${ids.size - embeddings.size} of ${ids.size} result chunks had no stored embedding.`);
+      }
+    } catch (err) {
+      log(`Could not load embeddings (${(err as Error).message.split('\n')[0]}).`);
+      log('Reporting word overlap only. Start the database, or pass --no-db to skip this attempt.');
+      embeddings = null;
+    } finally {
+      await closePool().catch(() => {});
+    }
+  }
+
+  const md = renderDiversity(measureDiversity(run, chunks, embeddings));
+  const outFile = resolve(dirname(resolve(file)), 'diversity.md');
+  writeFileSync(outFile, `${md}\n`);
+  log(md);
+  log(`Written to ${outFile}`);
+}
+
 function cmdHelp(): void {
   log(`rag-reranker-bench
 
@@ -639,6 +689,9 @@ function cmdHelp(): void {
   npm run bench                       Run the benchmark
   npm run report -- --run <raw.json>  Re-render a report from a previous run
   npm run inspect -- --run <raw.json> Per-iteration forensics: candidates scored, outliers
+  npm run diversity -- --run <raw.json>
+                                      How alike each stage's top results are, and whether
+                                      fusion or reranking changed it (--no-db: words only)
   npm run explain -- --retrieval vector --candidates 10
                                       Execution plan of one in-database rerank, with real row counts
 
@@ -674,6 +727,7 @@ const commands: Record<string, () => Promise<void> | void> = {
   bench: cmdBench,
   report: cmdReport,
   inspect: cmdInspect,
+  diversity: cmdDiversity,
   explain: cmdExplain,
   help: cmdHelp,
 };

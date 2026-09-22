@@ -25,7 +25,8 @@
     "report": "tsx src/cli.ts report",
     "inspect": "tsx src/cli.ts inspect",
     "explain": "tsx src/cli.ts explain",
-    "probe:model-cost": "tsx scripts/probe-model-cost.ts"
+    "probe:model-cost": "tsx scripts/probe-model-cost.ts",
+    "diversity": "tsx src/cli.ts diversity"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",
