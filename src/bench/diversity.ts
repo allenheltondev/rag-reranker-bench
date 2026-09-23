@@ -298,9 +298,10 @@ export function renderDiversity(stages: readonly StageDiversity[]): string {
   ]);
   table('rerank', `Reranking against no reranking, top ${K}`, [
     'Each reranked stage against the same retrieval without a reranker. A cross-encoder scores',
-    'each candidate on its own, so there is no mechanism by which it should spread results out;',
-    'near-duplicates that are all relevant should score alike and stay together. This table',
-    'checks that expectation rather than assuming it.',
+    'each candidate on its own and has no notion of variety, so any change here is a side effect',
+    'of what it promotes and demotes. Near-duplicates that differ in relevance get pulled apart;',
+    'near-duplicates that are equally relevant score alike and stay together. Which of those your',
+    'corpus is full of decides which way this table moves.',
   ]);
 
   out.push('## Reading this honestly');
